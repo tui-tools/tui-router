@@ -155,7 +155,7 @@
     }
   },
   "security": {
-    "needs_sudo": "The cockpit reads. Most reads are unprivileged — `ip -j`, /proc/net/dev, firewalld's zone, a dnsmasq lease count — and the ones that need root (the nftables ruleset, `ufw status`, the WireGuard dump) escalate with `sudo -n`, which never prompts: a card that cannot escalate reads unknown with the reason. Nothing here changes the machine; the tool a card hands off to escalates for its own changes.",
+    "needs_sudo": "The cockpit only reads. Most reads are unprivileged; the ones that need root (the nftables ruleset, `ufw status`, the WireGuard dump) escalate with `sudo -n`, which never prompts, and a card that cannot escalate reads unknown. Nothing here changes the machine.",
     "preview_before_run": true,
     "no_daemon": true,
     "no_network": true,
