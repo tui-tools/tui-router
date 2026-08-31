@@ -207,13 +207,51 @@ live router. Its exit code reports whether the tool could read, never a verdict
 about the machine: a router with no firewall is a successful run whose findings
 travel in the JSON.
 
+## Backup and restore
+
+`tui-router export` writes one self-describing, integrity-checked artifact that
+captures the router's identity — the nftables ruleset, the systemd-networkd
+units, the DHCP/DNS config, the WireGuard interfaces (public config only), and
+the router's own accounts (names and roles). `tui-router restore` reads that
+artifact back, previews it, and applies it after one explicit confirmation.
+
+```
+tui-router export  [--out FILE] [--sign KEY] [--demo]
+tui-router restore FILE [--verify PUBKEY] [--dry-run] [--demo]
+```
+
+| Flag | What it does |
+| --- | --- |
+| `export --out FILE` | write the artifact here (default `router-<host>-<stamp>.tuiback`) |
+| `export --sign KEY` | add a detached Ed25519 signature over the checksum file |
+| `restore --verify PUBKEY` | require a valid signature from this public key |
+| `restore --dry-run` | verify and preview only; apply nothing |
+| `--demo` | run the whole loop against the in-memory sample router, no root |
+
+The artifact is a gzip'd tar (`.tuiback`) with a `manifest.json`, one part per
+subsystem, an always-present `MANIFEST.sha256`, and — only when you pass a key —
+a detached `SIGNATURE`. Integrity is unconditional: a single altered byte makes
+restore refuse. A signature is optional and is checked only when you pass
+`--verify`; no key is ever required, and no secret is ever written to disk or
+into the artifact. WireGuard key material is stripped from the config and
+referenced by path — you provision it out of band — and accounts carry no
+credential hashes in this stage.
+
+`restore` never applies silently. It shows a per-subsystem preview, takes one
+confirmation, then writes the config files and reloads the nftables ruleset as
+one atomic `nft -f` transaction with a connectivity-safe rollback: the live
+ruleset is snapshotted first, and if you do not confirm you still have access,
+the ruleset reverts on its own. `--dry-run` stops after the preview.
+
 ## The contract
 
-tui-router is read-only. It has no mutating command of its own: every change
-belongs to the tool a card hands off to, and happens through that tool's
-preview-and-confirm. The one place this binary starts a process is its backend
-package — the read-only probes and the handoff exec — which is what the
-family's exec boundary requires.
+tui-router is a read-only cockpit with one mutating command, `restore`. Every
+card's change belongs to the tool it hands off to, through that tool's
+preview-and-confirm; `restore` follows the same thesis — preview, one explicit
+confirmation, and a connectivity-safe atomic apply — and it is the only path in
+this binary that writes to the machine. The one place this binary starts a
+process is its backend package — the read-only probes, the handoff exec, and
+the restore writes — which is what the family's exec boundary requires.
 
 The handoff is Bubble Tea's `tea.Exec`: the cockpit suspends, the child tool
 takes over the terminal, and the cockpit resumes and re-reads the machine when

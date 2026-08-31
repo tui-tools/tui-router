@@ -15,12 +15,18 @@ import (
 // count, and `wg show`. Nothing it does changes the machine — the change
 // happens in the tool a card hands off to.
 type Real struct {
-	ip         *runner.Runner
-	wg         *runner.Runner
-	nft        *runner.Runner
-	ufw        *runner.Runner
-	firewalld  *runner.Runner
-	systemctl  *runner.Runner
+	ip        *runner.Runner
+	wg        *runner.Runner
+	nft       *runner.Runner
+	ufw       *runner.Runner
+	firewalld *runner.Runner
+	systemctl *runner.Runner
+	// tee, useradd and groupadd are the write side, used only by restore. The
+	// reads above never touch them; every mutation the tool makes goes through
+	// one of these, so the exec boundary stays a single package.
+	tee        *runner.Runner
+	useradd    *runner.Runner
+	groupadd   *runner.Runner
 	procNetDev string
 	leasePaths []string
 }
@@ -72,6 +78,21 @@ func New(sudoPrefix []string) (*Real, error) {
 	})
 	r.wg, _ = runner.New(runner.Options{
 		Bin: "wg", SearchPaths: []string{"/usr/bin/wg", "/bin/wg"},
+		SudoPrefix: sudoPrefix, PrivilegedReads: &privileged,
+	})
+	// The write side, built the same way. A restore escalates every write, so
+	// these carry the privilege prefix; a machine that lacks one leaves the
+	// runner nil and restore reports it rather than failing halfway.
+	r.tee, _ = runner.New(runner.Options{
+		Bin: "tee", SearchPaths: []string{"/usr/bin/tee", "/bin/tee"},
+		SudoPrefix: sudoPrefix, PrivilegedReads: &privileged,
+	})
+	r.useradd, _ = runner.New(runner.Options{
+		Bin: "useradd", SearchPaths: []string{"/usr/sbin/useradd", "/sbin/useradd"},
+		SudoPrefix: sudoPrefix, PrivilegedReads: &privileged,
+	})
+	r.groupadd, _ = runner.New(runner.Options{
+		Bin: "groupadd", SearchPaths: []string{"/usr/sbin/groupadd", "/sbin/groupadd"},
 		SudoPrefix: sudoPrefix, PrivilegedReads: &privileged,
 	})
 	return r, nil

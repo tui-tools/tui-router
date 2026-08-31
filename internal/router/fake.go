@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/tui-tools/tui-router/internal/backup"
 )
 
 // Fake is the in-memory backend behind --demo and the tests: a plausible
@@ -17,10 +19,53 @@ type Fake struct {
 	// installed is the set of managing tools the demo pretends are present;
 	// empty by default so the demo shows the "not installed" path.
 	installed map[string]bool
+
+	// The fields below are the demo's in-memory "disk": the state export reads
+	// and restore writes, so the whole backup loop runs with no root and no
+	// real router. rawWG deliberately holds key material, exactly as a real
+	// /etc/wireguard/*.conf would, so the collector's stripping is exercised
+	// and the no-secrets test has something real to assert never leaked.
+	nft      string
+	networkd map[string]string
+	dhcpDNS  string
+	rawWG    map[string]string
+	accounts []Account
 }
 
-// NewFake returns the sample router.
+// Account mirrors backup.Account for the demo backend, so the demo's seed
+// reads without reaching into the backup package at every use site.
+type Account = backup.Account
+
+// DemoWireguardSecret is the fake key material the demo's WireGuard config
+// carries. It is documentation-only, and the no-secrets test asserts these
+// bytes never reach an assembled artifact.
+const DemoWireguardSecret = "DEMOprivateKEYshouldNEVERleak0000000000000ab="
+
+// NewFake returns the sample router, seeded with a plausible logical state so
+// `--demo export` and `--demo restore` both have something real to work on.
 func NewFake() *Fake {
+	return &Fake{
+		started:   time.Now(),
+		installed: map[string]bool{},
+		nft:       demoNftRuleset,
+		networkd: map[string]string{
+			"10-wan0.network": demoWanNetwork,
+			"20-lan0.network": demoLanNetwork,
+		},
+		dhcpDNS: demoDnsmasqConf,
+		rawWG: map[string]string{
+			"wg0": demoWireguardConf,
+		},
+		accounts: []Account{
+			{Name: "netadmin", Role: "admin"},
+			{Name: "monitor", Role: "readonly"},
+		},
+	}
+}
+
+// NewEmptyFake returns a demo backend with no logical state, the clean machine
+// a restore writes into during the round-trip test.
+func NewEmptyFake() *Fake {
 	return &Fake{started: time.Now(), installed: map[string]bool{}}
 }
 
