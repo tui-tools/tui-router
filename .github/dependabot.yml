@@ -1,0 +1,44 @@
+# Shared Dependabot configuration for the tui-tools family.
+#
+# Copy to .github/dependabot.yml at the root of the tool's repository. The
+# family pins nothing by hand, so this is what keeps a tool's dependencies and
+# its CI actions current between releases.
+#
+# No commit-message prefix is set on purpose: Dependabot's default subject
+# ("Bump x from a to b") already reads like the plain imperative sentences the
+# rest of the history is written in, and a "chore(deps):" prefix would be the
+# only conventional-commit line in the repository.
+version: 2
+
+updates:
+  # Go modules. Minor and patch updates arrive as one weekly pull request, so
+  # the routine bumps cost one review. A major is left on its own, because it
+  # is an API change that deserves to be read.
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      go-deps:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  # The workflow's own actions, grouped the same way. Directory "/" is what
+  # Dependabot reads as .github/workflows, and it rewrites a SHA pin together
+  # with its trailing version comment, which is how the workflows stay pinned
+  # to commits without going stale.
+  #
+  # It does not see the versions a `run:` step installs — govulncheck, pyyaml,
+  # gitleaks — so those are pinned and bumped inside the workflow.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"

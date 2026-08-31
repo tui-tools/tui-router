@@ -1,0 +1,45 @@
+# Secret scanning configuration for the tui-tools family.
+#
+# Copy to .gitleaks.toml at the root of the tool's repository, unchanged. CI
+# runs it twice: over the whole git history, because a secret that was
+# committed once stays reachable long after the commit that removed it, and
+# over the working tree, so a file that is not committed yet is caught first.
+[extend]
+# The upstream rule set is the baseline; this file only adds to it.
+useDefault = true
+
+# Not a secret, but it leaks whose machine built the artifact and how that
+# machine is laid out. It arrives the same way every time: a fixture, a log or
+# a terminal capture taken on a real workstation and committed verbatim.
+# Anything captured that way has to be scrubbed to a neutral path before it
+# lands in a public repository — /home/user, /root, or the placeholder the
+# surrounding document already uses.
+#
+# The username is the capture group rather than the whole path, because the
+# upstream allowlist drops any finding containing a common word and "home"
+# is one of them. Matching on the name also makes the allowlist below read
+# for what it is: the names that belong to a machine image, not a person.
+[[rules]]
+id = "developer-home-path"
+description = "Absolute home directory path from a developer machine"
+regex = '''(?:/home/|/Users/)([A-Za-z][A-Za-z0-9_-]*)/'''
+secretGroup = 1
+tags = ["privacy", "path"]
+
+[rules.allowlist]
+regexTarget = "secret"
+regexes = [
+  '''^(user|username|you|me|example|root|runner|ubuntu|debian|fedora|arch|vagrant|linuxbrew|Shared)$''',
+  # The stand-in people of the family's demos, fixtures and screenshots, and
+  # the placeholder every manual page reaches for. Invented, not captured.
+  '''^(ana|alice|bob|johndoe)$''',
+]
+
+# Build output. CI scans a fresh checkout, where none of this exists, but a
+# developer running the same command locally would otherwise be shown their
+# own compiled caches instead of a real finding.
+[allowlist]
+description = "Generated build output, never committed"
+paths = [
+  '''(^|/)(bin|dist|__pycache__)/''',
+]

@@ -1,0 +1,23 @@
+name: Feature request
+description: Something the tool should be able to do
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that the tool makes hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+      description: |
+        A key, a screen, a backend. If it changes the system, say how the
+        command preview would read.
+  - type: markdown
+    attributes:
+      value: |
+        Please keep in mind the family's rules: no daemon, no state of its own,
+        and no mutation without a previewed and confirmed command line.

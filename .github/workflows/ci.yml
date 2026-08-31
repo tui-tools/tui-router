@@ -1,0 +1,282 @@
+# Generated from tui-kit/templates/ci.yml. It runs the same checks
+# `make check` runs locally, cross-compiles for both release targets, scans
+# for known vulnerabilities and committed secrets, and on a `v*` tag lets
+# GoReleaser publish the binaries — signed, with an SBOM and build provenance
+# beside them. A tag that fails any of those jobs produces no release.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: vet, test and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # go.mod is the single place the family's Go version lives, so a
+          # bump there moves CI with it.
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "these files need gofmt:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # The family's lint bar, shared as .golangci.yml. Nothing is excluded
+      # wholesale: a deliberate finding carries a //nolint saying why.
+      #
+      # Built from source rather than downloaded: golangci-lint refuses a
+      # module whose language version is newer than the Go it was built with,
+      # and no released binary is built with 1.27 yet. goinstall compiles it
+      # with the Go set up above, so the lint tracks the toolchain.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.13.2
+          install-mode: goinstall
+
+      # The family's central promise — the command line you were shown is the
+      # one that ran — only holds while a single package can start a process.
+      # tui-kit ships the check, so every tool asserts the same boundary.
+      - name: exec boundary
+        run: |
+          go mod download github.com/tui-tools/tui-kit
+          kit=$(go list -m -f '{{.Dir}}' github.com/tui-tools/tui-kit)
+          bash "$kit/tools/check-exec.sh" .
+
+      # `tested` in the manifest is generated from compat/results.jsonl, and
+      # the README's Compatibility section is generated from the manifest. A
+      # claim that outran its evidence fails here.
+      - name: compatibility claims match the evidence
+        run: |
+          kit=$(go list -m -f '{{.Dir}}' github.com/tui-tools/tui-kit)
+          python3 "$kit/tools/compat-sync.py" --manifest tool.json \
+            --results compat/results.jsonl --check
+          python3 "$kit/tools/render-compat.py" --manifest tool.json \
+            --readme README.md --check
+
+      - name: go test
+        run: go test -race ./...
+
+      - name: build
+        run: CGO_ENABLED=0 go build -trimpath -o /tmp/tui-template ./cmd/tui-template
+
+      - name: verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+  cross-build:
+    name: cross-compile
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # go.mod is the single place the family's Go version lives, so a
+          # bump there moves CI with it.
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: build static linux/${{ matrix.goarch }}
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -trimpath -o "/tmp/tui-template_${GOARCH}" ./cmd/tui-template
+
+  manifest:
+    name: validate tool.json
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      # The schema is shared by the family and lives in tui-kit, so a tool
+      # cannot drift from it by editing a local copy.
+      - name: fetch the manifest schema from tui-kit
+        run: |
+          curl -fsSL --retry 3 -o /tmp/tool.schema.json \
+            https://raw.githubusercontent.com/tui-tools/tui-kit/main/schema/tool.schema.json
+
+      - name: validate tool.json
+        run: |
+          npx --yes -p ajv-cli@5 -p ajv-formats@3 ajv validate \
+            --spec=draft2020 -c ajv-formats \
+            -s /tmp/tool.schema.json -d tool.json
+
+      # GoReleaser cannot read tool.json, so the package description in
+      # .goreleaser.yaml is a copy of the manifest's tagline. This is what
+      # stops the copy from drifting, and it checks the rest of the package
+      # metadata the family fixed by convention along with it.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: package metadata matches the manifest
+        run: |
+          go mod download github.com/tui-tools/tui-kit
+          kit=$(go list -m -f '{{.Dir}}' github.com/tui-tools/tui-kit)
+          # check-nfpm.py reads .goreleaser.yaml, so the parser it uses is
+          # part of the check. The kit pins it by version and by the hash of
+          # every wheel of that version (tools/requirements.txt), and pip
+          # refuses anything that does not match.
+          python3 -m pip install --quiet --disable-pip-version-check \
+            --require-hashes -r "$kit/tools/requirements.txt"
+          python3 "$kit/tools/check-nfpm.py" --manifest tool.json \
+            --config .goreleaser.yaml
+
+  security:
+    name: vulnerabilities and secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # gitleaks reads the whole history: a secret that was committed
+          # once stays reachable long after the commit that removed it.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # go.mod is the single place the family's Go version lives, so a
+          # bump there moves CI with it.
+          go-version-file: go.mod
+          check-latest: true
+
+      # Reports only the vulnerabilities the build actually reaches, so a CVE
+      # in an unused corner of a dependency does not stop a release while a
+      # reachable one does.
+      # Pinned like everything else the job runs: @latest would make the
+      # result depend on the day. Dependabot does not track this one, so
+      # bump the version here when golang/vuln cuts a release.
+      - name: govulncheck
+        env:
+          GOVULNCHECK_VERSION: "v1.7.0"
+        run: |
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          govulncheck ./...
+
+      # The official gitleaks action requires a paid license for repositories
+      # owned by an organization, and this one is. The released binary is the
+      # same scanner without that condition; it is pinned to a version and its
+      # checksum is verified against the release's own checksums file before
+      # it is allowed to run.
+      # It is unpacked outside the checkout, into the runner's temp
+      # directory: the working-tree scan below would otherwise read the
+      # scanner's own binary as if it were part of the repository.
+      - name: install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o "$asset" "$base/$asset"
+          curl -fsSL --retry 3 -o checksums.txt \
+            "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          grep " ${asset}$" checksums.txt | sha256sum -c -
+          tar xzf "$asset" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: gitleaks (history)
+        run: gitleaks git --no-banner --redact --config .gitleaks.toml
+
+      # The working tree as well as the history: a file that is present but
+      # not committed yet is the one worth catching early.
+      - name: gitleaks (working tree)
+        run: gitleaks dir --no-banner --redact --config .gitleaks.toml
+
+  release:
+    name: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [check, cross-build, manifest, security]
+    runs-on: ubuntu-latest
+    permissions:
+      # contents to attach the artifacts, id-token for the keyless signing
+      # identity, attestations to record the provenance GitHub then serves to
+      # `gh attestation verify`.
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # go.mod is the single place the family's Go version lives, so a
+          # bump there moves CI with it.
+          go-version-file: go.mod
+          check-latest: true
+
+      # Both are called by GoReleaser itself: syft for the `sboms` section,
+      # cosign for the `signs` one. They have to be on PATH before it runs.
+      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # The checkout leaves the tag as a plain pointer at the commit; the
+      # annotation, which the release header prints as {{ .TagBody }}, only
+      # arrives with a forced tag fetch. Without it every release note is
+      # blank above the commit list.
+      - name: fetch the tag annotation
+        run: git fetch --force --tags
+
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Provenance: a signed statement of which workflow, at which commit,
+      # produced each file. `gh attestation verify <file> -R tui-tools/tui-template`
+      # checks a download against it without any key to distribute.
+      - name: attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar.zst
+            dist/checksums.txt
+
+      # The attestation lives in GitHub's store, which `gh attestation verify`
+      # reads; Scorecard's Signed-Releases check reads the release's assets
+      # instead, and looks for a `*.intoto.jsonl`. The same bundle, attached
+      # under that name, satisfies both readers.
+      - name: attach the provenance bundle to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp "${{ steps.attest.outputs.bundle-path }}" dist/provenance.intoto.jsonl
+          gh release upload "$GITHUB_REF_NAME" dist/provenance.intoto.jsonl --clobber

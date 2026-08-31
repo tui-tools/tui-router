@@ -1,0 +1,150 @@
+{
+  "schemaVersion": 1,
+  "name": "tui-template",
+  "binary": "tui-template",
+  "tagline": "A working skeleton for a new tui-tools tool",
+  "description": "The starting point for a new tool in the family. Press **Use this template**, rename it, replace one package, and you have a tool that looks and behaves like the rest.\n\nIt is not a pile of TODOs: it is a working tool. It lists the files in a directory and can update a file's timestamp, which is deliberately trivial — what matters is the shape around it, and that shape is already correct: the action table that generates the key map, the help screen and the confirm dialog; the backend interface with a real and a fake implementation; `--demo`; CI; and GoReleaser.\n\nThis `tool.json` is itself the example. It is a valid manifest, validated against [the schema](https://github.com/tui-tools/tui-kit/blob/main/schema/tool.schema.json) on every CI run, and the values are the ones you replace.",
+  "category": "template",
+  "homepage": "https://github.com/tui-tools/tui-template",
+  "repo": "https://github.com/tui-tools/tui-template",
+  "license": "MIT",
+  "platforms": [
+    "linux/amd64",
+    "linux/arm64"
+  ],
+  "icon": "assets/icon.svg",
+  "logo": "assets/logo.png",
+  "screenshots": [
+    {
+      "path": "docs/screenshots/tui-template-main.png",
+      "caption": "The list: the four bands every tool in the family draws"
+    },
+    {
+      "path": "docs/screenshots/tui-template-touch.png",
+      "caption": "The confirm dialog, showing the exact command line before it runs"
+    },
+    {
+      "path": "docs/screenshots/tui-template-help.png",
+      "caption": "The help screen, generated from the action table"
+    }
+  ],
+  "keys": [
+    {
+      "key": "t",
+      "action": "Touch the selected file"
+    },
+    {
+      "key": "/",
+      "action": "Filter the list"
+    },
+    {
+      "key": "r / ctrl+r",
+      "action": "Re-read the directory"
+    },
+    {
+      "key": "?",
+      "action": "Help"
+    },
+    {
+      "key": "q",
+      "action": "Quit"
+    }
+  ],
+  "backends": [
+    {
+      "name": "coreutils",
+      "binary": "touch",
+      "versionCommand": [
+        "touch",
+        "--version"
+      ],
+      "versionRegex": "coreutils\\) ([0-9][0-9.]*)",
+      "minimum": "8.0",
+      "searchPaths": [
+        "/usr/bin/touch",
+        "/bin/touch"
+      ],
+      "features": [
+        {
+          "name": "no-dereference",
+          "since": "8.1"
+        }
+      ],
+      "notes": [
+        {
+          "range": "<8.1",
+          "impact": "`touch -h` is missing, so the timestamp of a symlink is set on its target instead of on the link"
+        }
+      ]
+    }
+  ],
+  "install": {
+    "repo_url": "https://pkgs.tui.tools",
+    "source": {
+      "available": true,
+      "command": "git clone https://github.com/tui-tools/tui-template\ncd tui-template && make demo",
+      "url": "https://github.com/tui-tools/tui-template",
+      "note": "Or press \"Use this template\" on GitHub, which is the point of it."
+    },
+    "pacman": {
+      "available": false,
+      "package": "tui-template",
+      "repo": "tui-tools",
+      "requires_repo_setup": true,
+      "command": "sudo pacman -S tui-template",
+      "url": "https://pkgs.tui.tools/arch",
+      "note": "The template is never packaged. Your tool's channel turns available once its first release lands in pkgs.tui.tools."
+    },
+    "apt": {
+      "available": false,
+      "package": "tui-template",
+      "repo": "tui-tools",
+      "requires_repo_setup": true,
+      "command": "sudo apt install tui-template",
+      "url": "https://pkgs.tui.tools/deb",
+      "note": "The template is never packaged. Your tool's channel turns available once its first release lands in pkgs.tui.tools."
+    },
+    "dnf": {
+      "available": false,
+      "package": "tui-template",
+      "repo": "tui-tools",
+      "requires_repo_setup": true,
+      "command": "sudo dnf install tui-template",
+      "url": "https://pkgs.tui.tools/rpm",
+      "note": "The template is never packaged. Your tool's channel turns available once its first release lands in pkgs.tui.tools."
+    },
+    "binary": {
+      "available": false,
+      "pattern": "tui-template_{version}_linux_{arch}.tar.gz",
+      "command": "curl -fsSL https://github.com/tui-tools/tui-template/releases/download/v{version}/tui-template_{version}_linux_{arch}.tar.gz | tar -xz tui-template\nsudo install -m0755 tui-template /usr/local/bin/tui-template",
+      "url": "https://github.com/tui-tools/tui-template/releases",
+      "note": "The template is never released. Your tool is, once you tag v0.1.0."
+    }
+  },
+  "security": {
+    "needs_sudo": "Only the touch action escalates, and only when the configured prefix is non-empty. Listing a directory is an ordinary read. Replace this sentence with what your own tool escalates for.",
+    "preview_before_run": true,
+    "no_daemon": true,
+    "no_network": true,
+    "static_binary": true,
+    "signed_releases": false,
+    "config_paths": [
+      "/etc/tui-template/config.toml",
+      "~/.config/tui-template/config.toml"
+    ]
+  },
+  "maintainers": [
+    {
+      "name": "Edimar Cardoso",
+      "github": "edimarlnx"
+    }
+  ],
+  "since": "2026-08-29",
+  "keywords": [
+    "template",
+    "scaffold",
+    "bubbletea",
+    "starter"
+  ],
+  "unreleased": true
+}

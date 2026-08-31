@@ -1,0 +1,57 @@
+# Generated from tui-kit/templates/scorecard.yml.
+#
+# Scorecard grades the repository's own supply-chain posture — branch
+# protection, pinned actions, signed releases, whether a security policy
+# exists — from the outside, the same way a person deciding whether to trust
+# the tool would. Publishing the result is the point: the score is public and
+# the badge links to the run that produced it, so the claim is checkable
+# rather than asserted.
+name: Scorecard
+
+on:
+  branch_protection_rule:
+  schedule:
+    # Weekly. The score moves with GitHub settings and with dependencies, not
+    # only with commits, so it has to run on a clock as well as on a push.
+    - cron: "27 5 * * 1"
+  push:
+    branches: [main]
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: analyze
+    runs-on: ubuntu-latest
+    permissions:
+      # Upload the findings to the repository's code scanning view.
+      security-events: write
+      # Publish the result to the public OpenSSF API, which is what lets the
+      # badge and deps.dev read it. Keyless, via the workflow's OIDC token.
+      id-token: write
+      contents: read
+      actions: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: run analysis
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      # Kept for a while as a plain file too: code scanning only retains the
+      # latest, and a regression is easier to read against the previous run.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scorecard-results
+          path: results.sarif
+          retention-days: 5
+
+      - uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: results.sarif

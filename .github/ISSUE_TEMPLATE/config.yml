@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/tui-tools/tui-template/security/advisories/new
+    about: Report a vulnerability privately, not as a public issue.
+  - name: The tui-tools family
+    url: https://github.com/tui-tools
+    about: Other tools, the shared kit and the naming rules.

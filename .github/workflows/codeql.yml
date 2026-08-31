@@ -1,0 +1,59 @@
+# Generated from tui-kit/templates/codeql.yml.
+#
+# `go vet` and the golangci-lint bar in ci.yml read one package at a time.
+# CodeQL is the family's static application security testing pass: it follows
+# data across packages, so it sees the things that only look wrong once you
+# know where a value came from — a command argument built from input the tool
+# read, a path joined from something outside the repository. Findings land in
+# the repository's code scanning view beside the Scorecard results.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly. The queries improve between commits, so a quiet repository still
+    # gets re-analysed against the current pack.
+    - cron: "41 5 * * 2"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze go
+    runs-on: ubuntu-latest
+    permissions:
+      # Upload the findings to the repository's code scanning view.
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # go.mod is the single place the family's Go version lives, so a
+          # bump there moves CI with it.
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: initialize
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          languages: go
+          # security-extended adds the queries that are worth a look but are
+          # not in the default set; a tool that drives root commands is the
+          # kind of code they were written for.
+          queries: security-extended
+
+      - name: build
+        uses: github/codeql-action/autobuild@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+
+      - name: analyze
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          category: "/language:go"

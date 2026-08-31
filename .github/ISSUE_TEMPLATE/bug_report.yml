@@ -1,0 +1,80 @@
+# Bug report form for tui-template.
+#
+# Rendered from tui-kit/templates/ISSUE_TEMPLATE/bug_report.yml — every tool in
+# the family asks the same questions in the same order, so edit it there and
+# render again rather than editing this copy. Renaming the template renames the
+# tool in it too; the form itself stays as it is.
+#
+# The first field is the whole point: `tui-template --report` prints the tool
+# and kit versions, the backend and its version, the distribution, the kernel,
+# the terminal and where the binary came from, in one block that is safe to
+# publish. Asking for it once, in a fixed shape, is what stops a report from
+# turning into three rounds of "which version, on what?".
+name: Bug report
+description: Something the tool got wrong on a real machine
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The two things that make one useful here are the
+        `--report` block below and the exact steps that reproduce it.
+  - type: textarea
+    id: report
+    attributes:
+      label: Output of `tui-template --report`
+      description: |
+        Run `tui-template --report` and paste the output verbatim, without
+        editing it. It names the versions, the backend, the distribution, the
+        kernel and the terminal — and it deliberately carries no hostname,
+        user name, home path or address, so it is safe to publish as it is.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What the tool did, in your own words.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: |
+        The keystrokes or the command line, from starting the tool to the
+        moment it went wrong. If the state of the machine matters, say what it
+        was.
+      placeholder: |
+        1. Start `tui-template`
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: expected
+    attributes:
+      label: What you expected
+      description: "One line: what should have happened instead."
+    validations:
+      required: true
+  - type: checkboxes
+    id: demo
+    attributes:
+      label: Does it reproduce in demo mode?
+      description: |
+        `--demo` runs against sample data and never touches the system, so a
+        bug that shows up there is one anybody can reproduce on any machine.
+      options:
+        - label: I tried `tui-template --demo`, and it reproduces there too
+        - label: I tried `tui-template --demo`, and it does not reproduce there
+  - type: textarea
+    id: output
+    attributes:
+      label: Relevant output
+      description: |
+        Anything the tool printed, plus the raw output of the underlying
+        command if a parse looks wrong. Redact anything you would rather not
+        publish — addresses, host names, rule comments.
+      render: shell
