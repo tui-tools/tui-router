@@ -78,7 +78,7 @@ jobs:
         run: go test -race ./...
 
       - name: build
-        run: CGO_ENABLED=0 go build -trimpath -o /tmp/tui-template ./cmd/tui-template
+        run: CGO_ENABLED=0 go build -trimpath -o /tmp/tui-router ./cmd/tui-router
 
       - name: verify go.mod is tidy
         run: |
@@ -106,7 +106,7 @@ jobs:
           CGO_ENABLED: "0"
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
-        run: go build -trimpath -o "/tmp/tui-template_${GOARCH}" ./cmd/tui-template
+        run: go build -trimpath -o "/tmp/tui-router_${GOARCH}" ./cmd/tui-router
 
   manifest:
     name: validate tool.json
@@ -257,7 +257,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Provenance: a signed statement of which workflow, at which commit,
-      # produced each file. `gh attestation verify <file> -R tui-tools/tui-template`
+      # produced each file. `gh attestation verify <file> -R tui-tools/tui-router`
       # checks a download against it without any key to distribute.
       - name: attest build provenance
         id: attest

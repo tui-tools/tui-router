@@ -1,0 +1,14 @@
+public (active)
+  target: default
+  icmp-block-inversion: no
+  interfaces: eth0 eth1
+  sources: 
+  services: dhcpv6-client ssh
+  ports: 51820/udp
+  protocols: 
+  forward: yes
+  masquerade: yes
+  forward-ports: 
+  source-ports: 
+  icmp-blocks: 
+  rich rules: 

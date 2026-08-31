@@ -1,4 +1,4 @@
-# GoReleaser configuration for tui-template.
+# GoReleaser configuration for tui-router.
 #
 # One repository, one binary, one tag series:
 #
@@ -10,16 +10,16 @@
 # template in tui-kit/templates/.goreleaser.yaml.
 version: 2
 
-project_name: tui-template
+project_name: tui-router
 
 before:
   hooks:
     - go mod download
 
 builds:
-  - id: tui-template
-    main: ./cmd/tui-template
-    binary: tui-template
+  - id: tui-router
+    main: ./cmd/tui-router
+    binary: tui-router
     env:
       # Static binaries: no libc dependency, one file to copy anywhere.
       - CGO_ENABLED=0
@@ -34,9 +34,9 @@ builds:
       - -s -w -X main.version={{ .Version }}
 
 archives:
-  - id: tui-template
+  - id: tui-router
     ids:
-      - tui-template
+      - tui-router
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     formats:
@@ -55,22 +55,22 @@ archives:
 # manifest's tagline. tui-kit/tools/check-nfpm.py asserts the two are
 # identical, and `make manifest` runs it, so the copy cannot drift.
 nfpms:
-  - id: tui-template
+  - id: tui-router
     ids:
-      - tui-template
-    package_name: tui-template
+      - tui-router
+    package_name: tui-router
     formats:
       - deb
       - rpm
       - archlinux
     # Each ecosystem's own naming, so the files look native where they land:
-    # tui-template_0.1.0_amd64.deb, tui-template-0.1.0.x86_64.rpm,
-    # tui-template-0.1.0-1-x86_64.pkg.tar.zst.
+    # tui-router_0.1.0_amd64.deb, tui-router-0.1.0.x86_64.rpm,
+    # tui-router-0.1.0-1-x86_64.pkg.tar.zst.
     file_name_template: "{{ .ConventionalFileName }}"
     vendor: tui-tools
-    homepage: https://tui.tools/tools/tui-template/
+    homepage: https://tui.tools/tools/tui-router/
     maintainer: tui-tools <maintainers@tui.tools>
-    description: "A working skeleton for a new tui-tools tool"
+    description: "Every part of the router on one screen"
     license: MIT
     # The binary belongs in the distribution's own path, not /usr/local: it
     # arrives through the package manager, so the package manager owns it.
@@ -79,22 +79,22 @@ nfpms:
     priority: optional
     contents:
       - src: README.md
-        dst: /usr/share/doc/tui-template/README.md
+        dst: /usr/share/doc/tui-router/README.md
       - src: LICENSE
-        dst: /usr/share/doc/tui-template/LICENSE
+        dst: /usr/share/doc/tui-router/LICENSE
       - src: examples/config.toml
-        dst: /usr/share/doc/tui-template/config.toml
+        dst: /usr/share/doc/tui-router/config.toml
     # The package owns the binary name, so anything else shipping the same
     # command — an AUR -bin build, a hand-rolled local package — is a
     # conflict rather than a silent overwrite.
     provides:
-      - tui-template
+      - tui-router
     conflicts:
-      - tui-template-bin
+      - tui-router-bin
     rpm:
       group: Applications/System
     archlinux:
-      pkgbase: tui-template
+      pkgbase: tui-router
       packager: tui-tools <maintainers@tui.tools>
 
 checksum:
@@ -162,7 +162,7 @@ release:
   #
   # A lightweight tag leaves it blank, which is the reminder to write one.
   header: |
-    ## tui-template {{ .Tag }}
+    ## tui-router {{ .Tag }}
 
     {{ .TagContents }}
 

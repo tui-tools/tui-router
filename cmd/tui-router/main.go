@@ -1,11 +1,12 @@
-// Command tui-template is the starting point for a new tui-tools tool. It
-// lists the files in a directory and can update a file's timestamp, which is
-// deliberately trivial: what matters is the shape around it, which is the same
-// in every tool of the family.
+// Command tui-router is the read-only cockpit of the tui-tools family: it
+// reads a router's state — interfaces and WAN/LAN roles, the firewall posture,
+// live traffic, DHCP leases, WireGuard peers — from cheap system probes, shows
+// it as one card per area on a single screen, and hands the terminal to the
+// tool that manages each area when you press ENTER on its card.
 //
-// Rename it, replace internal/tool with your own subject, and keep the
-// contract: read-only by default, and no change without a previewed and
-// confirmed command line.
+// It changes nothing itself. Every mutation happens in the tool a card
+// launches (tui-firewall, tui-network, tui-traffic, tui-vpn), through that
+// tool's own preview-and-confirm. The cockpit is the overview and the way in.
 package main
 
 import (
@@ -17,25 +18,21 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tui-tools/tui-kit/config"
 	"github.com/tui-tools/tui-kit/theme"
-	"github.com/tui-tools/tui-template/internal/tool"
+	"github.com/tui-tools/tui-router/internal/router"
 )
 
 // toolName is the binary name, which is also the configuration directory:
-// /etc/tui-template/config.toml and ~/.config/tui-template/config.toml.
-const toolName = "tui-template"
-
-// keyDir is this tool's own configuration key. Yours go here.
-const keyDir = "dir"
+// /etc/tui-router/config.toml and ~/.config/tui-router/config.toml.
+const toolName = "tui-router"
 
 // version is stamped by the release build (-ldflags "-X main.version=…").
 var version = "dev"
 
 // defaults declares the configuration keys the tool understands. Only these
-// are read from the environment (TUI_TEMPLATE_DIR, …), so an unrelated
-// variable can never leak into the configuration.
+// are read from the environment (TUI_ROUTER_*), so an unrelated variable can
+// never leak into the configuration.
 func defaults() map[string]string {
 	return map[string]string{
-		keyDir:          ".",
 		config.KeySudo:  "sudo -n",
 		config.KeyTheme: "",
 	}
@@ -45,7 +42,7 @@ func defaults() map[string]string {
 type options struct {
 	demo        bool
 	report      bool
-	dir         string
+	check       bool
 	themePath   string
 	sudo        string
 	showVersion bool
@@ -60,21 +57,21 @@ func parseFlags(args []string, out *os.File) (options, error) {
 	fs := flag.NewFlagSet(toolName, flag.ContinueOnError)
 	fs.SetOutput(out)
 	fs.BoolVar(&opts.demo, "demo", false,
-		"run against sample data, without touching anything")
+		"run against a sample router, without reading or changing anything")
 	fs.BoolVar(&opts.report, "report", false, reportUsage)
-	fs.StringVar(&opts.dir, "dir", "",
-		"directory to list (overrides the config file)")
+	fs.BoolVar(&opts.check, "check", false,
+		"read every card once, print the result as JSON, and exit (no UI)")
 	fs.StringVar(&opts.themePath, "theme", "",
 		"path to an Omarchy-style colors.toml (overrides the config file)")
 	fs.StringVar(&opts.sudo, "sudo", "",
 		"privilege escalation prefix, e.g. \"sudo -n\" or \"\" to disable")
 	fs.BoolVar(&opts.showVersion, "version", false, "print the version and exit")
 	fs.Usage = func() {
-		_, _ = fmt.Fprintf(out, "tui-template — a starting point for a tui-tools tool\n\n"+
-			"Usage:\n  tui-template [flags]\n\nFlags:\n")
+		_, _ = fmt.Fprintf(out, "tui-router — the read-only router cockpit\n\n"+
+			"Usage:\n  tui-router [flags]\n\nFlags:\n")
 		fs.PrintDefaults()
 		_, _ = fmt.Fprintf(out, "\nConfiguration is read from %s, then %s, "+
-			"then TUI_TEMPLATE_* in the environment.\n",
+			"then TUI_ROUTER_* in the environment.\n",
 			config.SystemPathFor(toolName), config.UserPathFor(toolName))
 	}
 	if err := fs.Parse(args); err != nil {
@@ -95,12 +92,10 @@ func main() {
 	}
 }
 
-// run wires the configuration, the backend and the Bubble Tea program. Every
-// tool in the family has this function, and it is worth keeping it recognisable.
+// run wires the configuration, the backend and the Bubble Tea program.
 func run(args []string) error {
 	opts, err := parseFlags(args, os.Stdout)
 	if err != nil {
-		// flag already printed the reason and the usage.
 		if err == flag.ErrHelp {
 			return nil
 		}
@@ -117,21 +112,14 @@ func run(args []string) error {
 	}
 	applyOverrides(&cfg, opts)
 
-	// The configured theme is handed to the kit through the same variable the
-	// user could set by hand, so precedence stays in one place. It is set
-	// before the backend is built so --report can name the theme the UI would
-	// have used even on a machine where no backend can be.
 	if path := cfg.Theme(); path != "" {
 		if err := os.Setenv("TUI_THEME", path); err != nil {
 			return err
 		}
 	}
 
-	// --report is the non-interactive path that must work everywhere. It reads
-	// nothing privileged and it survives a machine where no backend can be
-	// built, because "there is nothing here to drive" is one of the things a
-	// bug report has to be able to say. So it comes before the backend is
-	// required.
+	// --report is the non-interactive path that must work everywhere: it reads
+	// nothing privileged and survives a machine where no backend can be built.
 	if opts.report {
 		return runReport(cfg, opts, os.Stdout)
 	}
@@ -141,37 +129,34 @@ func run(args []string) error {
 		return err
 	}
 
-	// The backend's version is probed once, at startup, and shown in the
-	// header: a version nobody has tested says so there instead of surprising
-	// the user later.
-	backendCompat := probeCompat(context.Background(), opts.demo)
+	// --check reads every card once and prints JSON. It runs the read path
+	// only, so it is safe against a production router.
+	if opts.check {
+		return runCheck(backend, probeCompat(context.Background(), opts.demo), os.Stdout)
+	}
 
-	program := tea.NewProgram(newApp(backend, theme.New(), backendCompat),
+	backends := probeCompat(context.Background(), opts.demo)
+	program := tea.NewProgram(newApp(backend, theme.New(), backends),
 		tea.WithAltScreen())
 	_, err = program.Run()
 	return err
 }
 
-// applyOverrides folds the command line into the configuration, which is the
-// last and highest-precedence layer.
+// applyOverrides folds the command line into the configuration, the last and
+// highest-precedence layer.
 func applyOverrides(cfg *config.Config, opts options) {
-	if opts.dir != "" {
-		cfg.Set(keyDir, opts.dir)
-	}
 	if opts.themePath != "" {
 		cfg.Set(config.KeyTheme, opts.themePath)
 	}
-	// An explicitly empty -sudo disables escalation, so the flag is applied
-	// whenever it was passed, empty value included.
 	if opts.sudoSet {
 		cfg.Set(config.KeySudo, opts.sudo)
 	}
 }
 
 // pickBackend returns the demo backend or the real one.
-func pickBackend(cfg config.Config, opts options) (tool.Backend, error) {
+func pickBackend(cfg config.Config, opts options) (router.Backend, error) {
 	if opts.demo {
-		return tool.NewFake(), nil
+		return router.NewFake(), nil
 	}
-	return tool.New(cfg.String(keyDir, "."), cfg.SudoPrefix())
+	return router.New(cfg.SudoPrefix())
 }
