@@ -25,6 +25,10 @@ jobs:
   analyze:
     name: analyze go
     runs-on: ubuntu-latest
+    # Both uploads need a public repository: code scanning and the OpenSSF
+    # API are unavailable while this tool is still private, so the job is
+    # skipped until the repository is published with its first release.
+    if: github.event.repository.visibility == 'public'
     permissions:
       # Upload the findings to the repository's code scanning view.
       security-events: write

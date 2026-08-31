@@ -1,4 +1,4 @@
-module github.com/tui-tools/tui-template
+module github.com/tui-tools/tui-router
 
 go 1.27.0
 

@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "name": "tui-template",
-  "binary": "tui-template",
-  "tagline": "A working skeleton for a new tui-tools tool",
-  "description": "The starting point for a new tool in the family. Press **Use this template**, rename it, replace one package, and you have a tool that looks and behaves like the rest.\n\nIt is not a pile of TODOs: it is a working tool. It lists the files in a directory and can update a file's timestamp, which is deliberately trivial — what matters is the shape around it, and that shape is already correct: the action table that generates the key map, the help screen and the confirm dialog; the backend interface with a real and a fake implementation; `--demo`; CI; and GoReleaser.\n\nThis `tool.json` is itself the example. It is a valid manifest, validated against [the schema](https://github.com/tui-tools/tui-kit/blob/main/schema/tool.schema.json) on every CI run, and the values are the ones you replace.",
-  "category": "template",
-  "homepage": "https://github.com/tui-tools/tui-template",
-  "repo": "https://github.com/tui-tools/tui-template",
+  "name": "tui-router",
+  "binary": "tui-router",
+  "tagline": "Every part of the router on one screen",
+  "description": "The read-only cockpit for a Linux router. One screen, one card per area — interfaces and their WAN/LAN roles, the firewall's posture, live traffic per interface, the DHCP server and its leases, the WireGuard peers — read from cheap system probes and refreshed in place.\n\nIt changes nothing itself. Press ENTER on a card and tui-router suspends, hands the terminal to the tool that manages that area — tui-firewall, tui-network, tui-traffic, tui-vpn — and resumes when you leave it, the same handoff the family launcher uses. The overview is here; the change happens in the tool the card opens, behind that tool's own preview and confirm.",
+  "category": "network",
+  "homepage": "https://github.com/tui-tools/tui-router",
+  "repo": "https://github.com/tui-tools/tui-router",
   "license": "MIT",
   "platforms": [
     "linux/amd64",
@@ -16,30 +16,30 @@
   "logo": "assets/logo.png",
   "screenshots": [
     {
-      "path": "docs/screenshots/tui-template-main.png",
-      "caption": "The list: the four bands every tool in the family draws"
+      "path": "docs/screenshots/tui-router-main.png",
+      "caption": "The cockpit: one card per area of the router, refreshed in place"
     },
     {
-      "path": "docs/screenshots/tui-template-touch.png",
-      "caption": "The confirm dialog, showing the exact command line before it runs"
+      "path": "docs/screenshots/tui-router-vpn.png",
+      "caption": "A card selected — ENTER hands off to the tool that manages it"
     },
     {
-      "path": "docs/screenshots/tui-template-help.png",
-      "caption": "The help screen, generated from the action table"
+      "path": "docs/screenshots/tui-router-help.png",
+      "caption": "The help screen, and the promise: read-only, the cockpit changes nothing"
     }
   ],
   "keys": [
     {
-      "key": "t",
-      "action": "Touch the selected file"
+      "key": "↑/↓",
+      "action": "Select a card"
     },
     {
-      "key": "/",
-      "action": "Filter the list"
+      "key": "enter",
+      "action": "Open the tool that manages the selected card"
     },
     {
       "key": "r / ctrl+r",
-      "action": "Re-read the directory"
+      "action": "Read the router again now"
     },
     {
       "key": "?",
@@ -52,85 +52,118 @@
   ],
   "backends": [
     {
-      "name": "coreutils",
-      "binary": "touch",
+      "name": "iproute2",
+      "binary": "ip",
       "versionCommand": [
-        "touch",
-        "--version"
+        "ip",
+        "-V"
       ],
-      "versionRegex": "coreutils\\) ([0-9][0-9.]*)",
-      "minimum": "8.0",
+      "versionRegex": "iproute2-([0-9][0-9.]*)",
+      "minimum": "5.0",
       "searchPaths": [
-        "/usr/bin/touch",
-        "/bin/touch"
+        "/usr/sbin/ip",
+        "/sbin/ip",
+        "/usr/bin/ip"
       ],
       "features": [
         {
-          "name": "no-dereference",
-          "since": "8.1"
+          "name": "json-output",
+          "since": "4.13"
         }
       ],
       "notes": [
         {
-          "range": "<8.1",
-          "impact": "`touch -h` is missing, so the timestamp of a symlink is set on its target instead of on the link"
+          "range": "<4.13",
+          "impact": "`ip -j` (JSON output) is missing, so the interface and route cards cannot be read from this version"
         }
       ]
+    },
+    {
+      "name": "nftables",
+      "binary": "nft",
+      "versionCommand": [
+        "nft",
+        "-v"
+      ],
+      "versionRegex": "nftables v([0-9][0-9.]*)",
+      "minimum": "0.9",
+      "searchPaths": [
+        "/usr/sbin/nft",
+        "/sbin/nft"
+      ],
+      "features": [],
+      "notes": []
+    },
+    {
+      "name": "wireguard-tools",
+      "binary": "wg",
+      "versionCommand": [
+        "wg",
+        "--version"
+      ],
+      "versionRegex": "wireguard-tools v([0-9][0-9.]*)",
+      "minimum": "1.0",
+      "searchPaths": [
+        "/usr/bin/wg",
+        "/bin/wg"
+      ],
+      "features": [],
+      "notes": []
     }
   ],
   "install": {
     "repo_url": "https://pkgs.tui.tools",
     "source": {
       "available": true,
-      "command": "git clone https://github.com/tui-tools/tui-template\ncd tui-template && make demo",
-      "url": "https://github.com/tui-tools/tui-template",
-      "note": "Or press \"Use this template\" on GitHub, which is the point of it."
+      "command": "git clone https://github.com/tui-tools/tui-router\ncd tui-router && make demo",
+      "url": "https://github.com/tui-tools/tui-router",
+      "note": "Or run it against a sample router with `tui-router --demo`, which needs nothing installed."
     },
     "pacman": {
       "available": false,
-      "package": "tui-template",
+      "package": "tui-router",
       "repo": "tui-tools",
       "requires_repo_setup": true,
-      "command": "sudo pacman -S tui-template",
+      "command": "sudo pacman -S tui-router",
       "url": "https://pkgs.tui.tools/arch",
-      "note": "The template is never packaged. Your tool's channel turns available once its first release lands in pkgs.tui.tools."
+      "note": "Available once tui-router's first release lands in pkgs.tui.tools."
     },
     "apt": {
       "available": false,
-      "package": "tui-template",
+      "package": "tui-router",
       "repo": "tui-tools",
       "requires_repo_setup": true,
-      "command": "sudo apt install tui-template",
+      "command": "sudo apt install tui-router",
       "url": "https://pkgs.tui.tools/deb",
-      "note": "The template is never packaged. Your tool's channel turns available once its first release lands in pkgs.tui.tools."
+      "note": "Available once tui-router's first release lands in pkgs.tui.tools."
     },
     "dnf": {
       "available": false,
-      "package": "tui-template",
+      "package": "tui-router",
       "repo": "tui-tools",
       "requires_repo_setup": true,
-      "command": "sudo dnf install tui-template",
+      "command": "sudo dnf install tui-router",
       "url": "https://pkgs.tui.tools/rpm",
-      "note": "The template is never packaged. Your tool's channel turns available once its first release lands in pkgs.tui.tools."
+      "note": "Available once tui-router's first release lands in pkgs.tui.tools."
     },
     "binary": {
       "available": false,
-      "pattern": "tui-template_{version}_linux_{arch}.tar.gz",
-      "command": "curl -fsSL https://github.com/tui-tools/tui-template/releases/download/v{version}/tui-template_{version}_linux_{arch}.tar.gz | tar -xz tui-template\nsudo install -m0755 tui-template /usr/local/bin/tui-template",
-      "url": "https://github.com/tui-tools/tui-template/releases",
-      "note": "The template is never released. Your tool is, once you tag v0.1.0."
+      "pattern": "tui-router_{version}_linux_{arch}.tar.gz",
+      "command": "curl -fsSL https://github.com/tui-tools/tui-router/releases/download/v{version}/tui-router_{version}_linux_{arch}.tar.gz | tar -xz tui-router\nsudo install -m0755 tui-router /usr/local/bin/tui-router",
+      "url": "https://github.com/tui-tools/tui-router/releases",
+      "note": "Available once tui-router is released."
     }
   },
   "security": {
-    "needs_sudo": "Only the touch action escalates, and only when the configured prefix is non-empty. Listing a directory is an ordinary read. Replace this sentence with what your own tool escalates for.",
+    "needs_sudo": "The cockpit only reads. Most reads are unprivileged; the ones that need root (the nftables ruleset, `ufw status`, the WireGuard dump) escalate with `sudo -n`, which never prompts, and a card that cannot escalate reads unknown. Nothing here changes the machine.",
     "preview_before_run": true,
     "no_daemon": true,
     "no_network": true,
     "static_binary": true,
     "signed_releases": false,
     "config_paths": [
-      "/etc/tui-template/config.toml",
-      "~/.config/tui-template/config.toml"
+      "/etc/tui-router/config.toml",
+      "~/.config/tui-router/config.toml"
     ]
   },
   "maintainers": [
@@ -139,12 +172,13 @@
       "github": "edimarlnx"
     }
   ],
-  "since": "2026-08-29",
+  "since": "2026-08-30",
   "keywords": [
-    "template",
-    "scaffold",
-    "bubbletea",
-    "starter"
+    "router",
+    "dashboard",
+    "cockpit",
+    "network",
+    "overview"
   ],
   "unreleased": true
 }

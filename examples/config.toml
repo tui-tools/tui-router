@@ -1,14 +1,18 @@
-# tui-template configuration.
+# tui-router configuration.
 #
-# Read from /etc/tui-template/config.toml first, then
-# ~/.config/tui-template/config.toml, with the user file overriding the
-# machine-wide one. TUI_TEMPLATE_* environment variables override both, and
+# Read from /etc/tui-router/config.toml first, then
+# ~/.config/tui-router/config.toml, with the user file overriding the
+# machine-wide one. TUI_ROUTER_* environment variables override both, and
 # command line flags override everything.
+#
+# tui-router is a read-only cockpit: it has no keys of its own beyond the two
+# every tool in the family shares. It changes nothing, so there is nothing here
+# to configure about what it does — only how it escalates its reads and how it
+# is themed.
 
-# This tool's own key: the directory to list. Replace it with yours.
-dir = "."
-
-# Privilege escalation prefix used for actions; "" runs the command directly.
+# Privilege escalation prefix for the reads that need root (the nftables
+# ruleset, `ufw status`, the WireGuard dump). "sudo -n" never prompts; "" runs
+# the reads directly, and a card that cannot escalate simply reads unknown.
 sudo = "sudo -n"
 
 # Path to an Omarchy-style colors.toml. Empty follows the active Omarchy
@@ -16,5 +20,4 @@ sudo = "sudo -n"
 theme = ""
 
 # Every key can also be set in the environment, upper-cased and prefixed:
-#   TUI_TEMPLATE_DIR=/srv
-#   TUI_TEMPLATE_SUDO="doas"
+#   TUI_ROUTER_SUDO="doas"
