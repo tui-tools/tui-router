@@ -22,6 +22,12 @@ const (
 
 // View renders the whole screen.
 func (a *app) View() string {
+	if a.wiz != nil {
+		return a.wiz.View(a.theme, a.width, a.height)
+	}
+	if a.power != nil {
+		return a.power.View(a.theme, a.width, a.height)
+	}
 	if a.mode == modeHelp {
 		return lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Center,
 			ui.HelpScreen(a.theme, "tui-router — keys", helpKeys(), a.width))
@@ -42,13 +48,37 @@ func (a *app) View() string {
 
 	help := ui.HelpBar(a.theme, shortHelpKeys(), a.width)
 	status := ui.StatusLine(a.theme, a.statusKind, a.status, a.defaultStatus(), a.width)
-	return strings.Join([]string{a.header(), body, help, status}, "\n")
+	parts := []string{a.header()}
+	if banner := a.rolesBanner(); banner != "" {
+		parts = append(parts, banner)
+	}
+	parts = append(parts, body, help, status)
+	return strings.Join(parts, "\n")
+}
+
+// rolesBanner is the safe-mode warning: a router-profile host whose WAN/LAN
+// roles are not both assigned forwards nothing, and the wizard fixes that.
+func (a *app) rolesBanner() string {
+	if a.cur == nil || !a.cur.Roles.NeedsWizard() {
+		return ""
+	}
+	text := "▲ WAN/LAN roles not assigned — safe mode, nothing is forwarded." +
+		"  Press w for the roles wizard."
+	return a.theme.Warn.Render(ui.Truncate(text, a.width))
+}
+
+// bannerLines is how many rows the roles banner takes.
+func (a *app) bannerLines() int {
+	if a.rolesBanner() == "" {
+		return 0
+	}
+	return 1
 }
 
 // bodyHeight is the number of rows the card grid may use: the screen less the
-// two-line header, the help bar and the status line.
+// two-line header, the banner when it shows, the help bar and the status line.
 func (a *app) bodyHeight() int {
-	return max(a.height-headerLines-2, 6)
+	return max(a.height-headerLines-a.bannerLines()-2, 6)
 }
 
 // header renders the facts at the top of the screen.
@@ -240,6 +270,7 @@ func shortHelpKeys() []ui.KeyHint {
 	return []ui.KeyHint{
 		{Key: "↑/↓", Desc: "select card"},
 		{Key: "↵", Desc: "open tool"},
+		{Key: "w", Desc: "roles"},
 		{Key: "r", Desc: "refresh"},
 		{Key: "?", Desc: "help"},
 		{Key: "q", Desc: "quit"},
@@ -253,10 +284,14 @@ func helpKeys() []ui.KeyHint {
 		{Key: "tab / shift+tab", Desc: "next / previous card"},
 		{Key: "g / G", Desc: "first / last card"},
 		{Key: "enter", Desc: "open the tool that manages the selected card"},
+		{Key: "w", Desc: "roles wizard: assign the WAN/LAN roles (router profile)"},
+		{Key: "B", Desc: "reboot the router (typed confirm)"},
+		{Key: "P", Desc: "power the router off (typed confirm)"},
 		{Key: "r / ctrl+r", Desc: "read the router again now"},
 		{Key: "?", Desc: "this help"},
 		{Key: "q", Desc: "quit"},
 		{Key: "", Desc: ""},
-		{Key: "note", Desc: "read-only: the cockpit changes nothing; the tool it opens does"},
+		{Key: "note", Desc: "every mutation shows its exact command and asks first;"},
+		{Key: "", Desc: "the cards themselves stay read-only and hand off to their tools"},
 	}
 }
