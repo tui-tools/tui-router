@@ -17,11 +17,27 @@ type Fake struct {
 	// installed is the set of managing tools the demo pretends are present;
 	// empty by default so the demo shows the "not installed" path.
 	installed map[string]bool
+	// roles is the demo's role-assignment state, driven by the roles wizard
+	// (see roles_fake.go).
+	roles *fakeRoles
 }
 
 // NewFake returns the sample router.
 func NewFake() *Fake {
-	return &Fake{started: time.Now(), installed: map[string]bool{}}
+	return &Fake{started: time.Now(), installed: map[string]bool{},
+		roles: &fakeRoles{content: demoRolesConf}}
+}
+
+// demoInterfaces is the sample router's NIC list, shared by the snapshot and
+// the roles wizard's MAC resolution. The MACs are from the RFC 7042
+// documentation range, the same rule the committed fixtures follow.
+func demoInterfaces() []Interface {
+	return []Interface{
+		{Name: "eth0", Up: true, IPv4: "198.51.100.20", MAC: "00:00:5e:00:53:10", Role: "wan"},
+		{Name: "eth1", Up: true, IPv4: "192.0.2.1", MAC: "00:00:5e:00:53:11", Role: "lan"},
+		{Name: "wg0", Up: true, IPv4: "10.0.0.1", Role: "other"},
+		{Name: "eth2", Up: false, IPv4: "", MAC: "00:00:5e:00:53:12", Role: "other"},
+	}
 }
 
 // Name identifies the backend. It calls itself "demo" so a report cannot be
@@ -48,13 +64,8 @@ func (f *Fake) Read(_ context.Context) (Snapshot, error) {
 	elapsed := now.Sub(f.started).Seconds()
 
 	return Snapshot{
-		At: now,
-		Interfaces: []Interface{
-			{Name: "eth0", Up: true, IPv4: "198.51.100.20", Role: "wan"},
-			{Name: "eth1", Up: true, IPv4: "192.0.2.1", Role: "lan"},
-			{Name: "wg0", Up: true, IPv4: "10.0.0.1", Role: "other"},
-			{Name: "eth2", Up: false, IPv4: "", Role: "other"},
-		},
+		At:         now,
+		Interfaces: demoInterfaces(),
 		Firewall: FirewallPosture{
 			Backend: "nftables", Active: true, Rules: 6, Masquerade: true,
 			Summary: "input drop · 6 rules · NAT",
@@ -64,7 +75,9 @@ func (f *Fake) Read(_ context.Context) (Snapshot, error) {
 			{Name: "eth1", RxBytes: 267_286_000 + uint64(elapsed*180_000), TxBytes: 893_947_000 + uint64(elapsed*640_000)},
 			{Name: "wg0", RxBytes: 27_762_000 + uint64(elapsed*24_000), TxBytes: 57_196_000 + uint64(elapsed*36_000)},
 		},
-		DHCP: DHCP{Server: "dnsmasq", Active: true, Leases: 12},
+		DHCP:    DHCP{Server: "dnsmasq", Active: true, Leases: 12},
+		Updates: Updates{Available: true, Pending: 4, Security: 1},
+		Roles:   f.readRoles(),
 		VPN: VPN{
 			Interfaces: []WGInterface{{Name: "wg0", Peers: 3, Handshakes: 2}},
 			Headscale:  false,

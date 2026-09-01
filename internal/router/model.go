@@ -25,11 +25,12 @@ const (
 	CardTraffic    CardKind = "traffic"
 	CardDHCP       CardKind = "dhcp"
 	CardVPN        CardKind = "vpn"
+	CardUpdates    CardKind = "updates"
 )
 
 // Kinds is the fixed card order. A card that moved between reads would be a
 // card nobody could learn the position of.
-var Kinds = []CardKind{CardInterfaces, CardFirewall, CardTraffic, CardDHCP, CardVPN}
+var Kinds = []CardKind{CardInterfaces, CardFirewall, CardTraffic, CardDHCP, CardVPN, CardUpdates}
 
 // Status is a card's verdict, used only to colour it. A cockpit reports, it
 // does not grade a machine, so the palette is deliberately small: ok for a
@@ -53,6 +54,9 @@ type Interface struct {
 	Up bool `json:"up"`
 	// IPv4 is the first global IPv4 address, empty when there is none.
 	IPv4 string `json:"ipv4,omitempty"`
+	// MAC is the link-layer address, lower-case, empty when the interface has
+	// none (a tunnel). The roles wizard uses it for by-MAC pinning.
+	MAC string `json:"mac,omitempty"`
 	// Role is "wan" for the interface carrying a default route, "lan" for one
 	// with a directly attached subnet, "other" otherwise (loopback, tunnels).
 	Role string `json:"role"`
@@ -123,6 +127,18 @@ type VPN struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// Updates is the pending-updates state, read from `tui-update --check`.
+type Updates struct {
+	// Available reports whether the check could run at all; when it is false,
+	// Reason says why (the binary is absent, or the check failed).
+	Available bool `json:"available"`
+	// Pending and Security are the counts the check reported.
+	Pending  int `json:"pending"`
+	Security int `json:"security"`
+	// Reason is why the state is unknown, when it is.
+	Reason string `json:"reason,omitempty"`
+}
+
 // Snapshot is one read of the whole machine: everything the cards are built
 // from, taken as close together in time as the probes allow.
 type Snapshot struct {
@@ -131,6 +147,10 @@ type Snapshot struct {
 	Counters   []Counter       `json:"-"`
 	DHCP       DHCP            `json:"dhcp"`
 	VPN        VPN             `json:"vpn"`
+	Updates    Updates         `json:"updates"`
+	// Roles is the router profile's WAN/LAN role assignment state, which is
+	// what decides whether the cockpit offers the roles wizard.
+	Roles RolesStatus `json:"roles"`
 	// At is when the counters were read, so a throughput can be derived from
 	// two snapshots.
 	At time.Time `json:"-"`
@@ -144,6 +164,7 @@ var CardTool = map[CardKind]string{
 	CardTraffic:    "tui-traffic",
 	CardDHCP:       "tui-network",
 	CardVPN:        "tui-vpn",
+	CardUpdates:    "tui-update",
 }
 
 // Card is one rendered panel: a title, a verdict, a headline and the detail

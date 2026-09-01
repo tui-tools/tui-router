@@ -18,6 +18,7 @@ type ipAddr struct {
 	Flags     []string `json:"flags"`
 	OperState string   `json:"operstate"`
 	LinkType  string   `json:"link_type"`
+	Address   string   `json:"address"`
 	AddrInfo  []struct {
 		Family string `json:"family"`
 		Local  string `json:"local"`
@@ -72,6 +73,7 @@ func ParseInterfaces(addrJSON, routeJSON string) []Interface {
 			Name: a.IfName,
 			Up:   interfaceUp(a),
 			IPv4: firstGlobalIPv4(a),
+			MAC:  strings.ToLower(a.Address),
 			Role: role(a, wan, lan),
 		}
 		out = append(out, iface)
@@ -121,6 +123,40 @@ func role(a ipAddr, wan, lan map[string]bool) string {
 	default:
 		return "other"
 	}
+}
+
+// updateCheck mirrors the two counts this tool reads from the JSON document
+// `tui-update --check` prints. Pointers tell a missing field from a zero, so
+// a document of the wrong shape is refused rather than read as "up to date".
+type updateCheck struct {
+	Pending      *int   `json:"pending"`
+	Security     *int   `json:"security"`
+	PendingError string `json:"pendingError"`
+}
+
+// ParseUpdateCheck reads the pending/security counts from another program's
+// JSON, defensively: a document that is not JSON, lacks the counts, carries a
+// negative count, or reports its own read failed comes back not-ok with a
+// reason, never as an invented number.
+func ParseUpdateCheck(text string) Updates {
+	var doc updateCheck
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		return Updates{Reason: "unreadable tui-update --check output"}
+	}
+	if doc.PendingError != "" {
+		return Updates{Reason: doc.PendingError}
+	}
+	if doc.Pending == nil {
+		return Updates{Reason: "tui-update --check reported no pending count"}
+	}
+	u := Updates{Available: true, Pending: *doc.Pending}
+	if doc.Security != nil {
+		u.Security = *doc.Security
+	}
+	if u.Pending < 0 || u.Security < 0 {
+		return Updates{Reason: "tui-update --check reported a negative count"}
+	}
+	return u
 }
 
 // ParseProcNetDev turns /proc/net/dev into per-interface byte counters. The
