@@ -38,6 +38,18 @@
       "action": "Open the tool that manages the selected card"
     },
     {
+      "key": "w",
+      "action": "Roles wizard: assign the WAN/LAN roles (router profile)"
+    },
+    {
+      "key": "B",
+      "action": "Reboot the router (typed confirm)"
+    },
+    {
+      "key": "P",
+      "action": "Power the router off (typed confirm)"
+    },
+    {
       "key": "r / ctrl+r",
       "action": "Read the router again now"
     },

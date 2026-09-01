@@ -46,6 +46,12 @@ type app struct {
 	loadFailed bool
 	// busy blocks input and the refresh tick while a handoff is running.
 	busy bool
+
+	// wiz is the roles wizard while it is open; the cockpit's one guided
+	// mutation (see wizard.go).
+	wiz *wizard
+	// power is the typed reboot/poweroff confirm while it is open.
+	power *powerDialog
 }
 
 // loadedMsg carries the result of a read.
@@ -119,6 +125,49 @@ func (a *app) rebuild() {
 
 // Update is the main event loop.
 func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// While the wizard is open it owns every message except the window size
+	// and the clock; the refresh is paused so the roles state the wizard is
+	// editing cannot change under it.
+	if a.wiz != nil {
+		switch msg.(type) {
+		case tea.WindowSizeMsg:
+			// Falls through to the normal handling below.
+		case tickMsg:
+			return a, tick()
+		case loadedMsg:
+			return a, nil
+		default:
+			cmd := a.wiz.Update(msg)
+			if a.wiz.closed {
+				a.wiz = nil
+				// The wizard may have changed the machine — re-read it.
+				a.loading = true
+				return a, tea.Batch(cmd, a.load())
+			}
+			return a, cmd
+		}
+	}
+	// The typed power confirm likewise owns the keys while it is open.
+	if a.power != nil {
+		switch msg.(type) {
+		case tea.WindowSizeMsg, tickMsg, loadedMsg, powerDoneMsg:
+			// Falls through to the normal handling below.
+		default:
+			cmd := a.power.Update(msg)
+			if a.power.done {
+				dialog := a.power
+				a.power = nil
+				if dialog.confirmed {
+					a.busy = true
+					a.setStatusf(ui.StatusInfo, "running %s…", dialog.action.word)
+					return a, tea.Batch(cmd, runPower(dialog.action))
+				}
+				a.setStatusf(ui.StatusInfo, "%s cancelled", dialog.action.word)
+			}
+			return a, cmd
+		}
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.width, a.height = msg.Width, msg.Height
@@ -158,6 +207,15 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.loading = true
 		return a, a.load()
 
+	case powerDoneMsg:
+		a.busy = false
+		if msg.err != nil {
+			a.setStatusf(ui.StatusError, "%s: %v", msg.word, msg.err)
+			return a, nil
+		}
+		a.setStatusf(ui.StatusInfo, "%s requested", msg.word)
+		return a, nil
+
 	case tea.KeyMsg:
 		return a.handleKey(msg)
 	}
@@ -195,8 +253,52 @@ func (a *app) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.load()
 	case "enter":
 		return a, a.launch()
+	case "w":
+		a.openWizard()
+	case "B":
+		a.openPower("reboot")
+	case "P":
+		a.openPower("poweroff")
 	}
 	return a, nil
+}
+
+// openWizard opens the roles wizard when this is a router-profile host and
+// the backend can manage roles.
+func (a *app) openWizard() {
+	if a.cur == nil {
+		return
+	}
+	mgr, ok := a.backend.(router.RoleManager)
+	if !ok {
+		a.setStatus(ui.StatusWarn, "this backend cannot manage roles")
+		return
+	}
+	if !a.cur.Roles.ProfilePresent {
+		a.setStatus(ui.StatusWarn,
+			"no router profile here ("+router.RolesDir+" is absent) — nothing to assign")
+		return
+	}
+	a.wiz = newWizard(mgr, a.cur.Roles, a.cur.Interfaces)
+}
+
+// openPower opens the typed confirm for one power action.
+func (a *app) openPower(word string) {
+	pm, ok := a.backend.(router.PowerManager)
+	if !ok {
+		a.setStatus(ui.StatusWarn, "this backend cannot manage power")
+		return
+	}
+	var action powerAction
+	switch word {
+	case "reboot":
+		action = powerAction{word: "reboot", preview: pm.RebootPreview(), exec: pm.Reboot}
+	case "poweroff":
+		action = powerAction{word: "poweroff", preview: pm.PoweroffPreview(), exec: pm.Poweroff}
+	default:
+		return
+	}
+	a.power = newPowerDialog(action)
 }
 
 // launch hands the terminal to the selected card's managing tool, when it is

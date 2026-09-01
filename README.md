@@ -33,11 +33,60 @@ card opens, behind that tool's own preview and confirm.
 | Traffic | the live throughput per interface, a small `/proc/net/dev` delta refreshed on a timer | tui-traffic |
 | DHCP | whether a DHCP server (dnsmasq or kea) is running, and how many leases it holds | tui-network |
 | VPN | any WireGuard interface and its peer count (from `wg show`), and whether a headscale control plane is present | tui-vpn |
+| Updates | the pending and security update counts, read from `tui-update --check` (cached, re-read every few minutes); "tui-update not installed" when the binary is absent | tui-update |
 
 Every read is cheap and read-only. Most are unprivileged; the few that need
 root — the nftables ruleset, `ufw status`, the WireGuard dump — escalate with
 `sudo -n`, which never prompts. A card that cannot escalate reads *unknown* with
 the reason, rather than failing the whole screen.
+
+## The roles wizard (router profile)
+
+A fresh [Omarchy Server](https://github.com/edimarlnx/omarchy-server) router
+boots into safe mode: `/etc/omarchy/router/roles.conf` exists but assigns no
+WAN or LAN role, so every port takes a DHCP lease and nothing is forwarded —
+reachable, not open, and not locked out. Until now no tool in the family could
+assign those roles. The cockpit closes that gap.
+
+On a router-profile host whose roles are not both assigned, the cockpit shows
+a banner and `w` opens the roles wizard:
+
+1. **Select.** Every NIC is listed with its name, MAC, link state and current
+   IP. Mark each one WAN, LAN or unassigned — a role is a set, so several WAN
+   uplinks (failover) and several LAN ports (bridged into `br-lan`) are fine,
+   and the same port may carry both. `m` pins a NIC's role to its MAC instead
+   of its name, so the assignment survives a kernel rename.
+2. **Preview the write.** The wizard shows a unified diff of `roles.conf`, the
+   output of `omarchy-router-nics --preview` (run read-only), and the exact
+   `install -m 644` command. Confirming writes the file — through a staged
+   temp file, never a partial write — and nothing else.
+3. **Preview the apply.** A second, danger-colored confirm shows every command
+   of the apply sequence and warns that an SSH session may drop. Before the
+   apply runs, the wizard stages the previous `roles.conf` as
+   `roles.conf.prev` and arms a timed revert with `systemd-run`: unless
+   connectivity is confirmed within 120 seconds, the previous assignment is
+   restored and re-applied automatically. Then `omarchy-router-nics --apply`
+   rewrites the `.network` units and reloads networkd.
+4. **Confirm connectivity.** If the session held, one more previewed command
+   (`systemctl stop tui-router-roles-revert.timer …`) disarms the revert and
+   the new mapping is permanent. If it did not, wait two minutes and the
+   router comes back on the old assignment.
+
+Where `systemd-run` is not available the wizard degrades honestly: no
+automatic revert is armed, and the result screen prints the exact manual
+revert commands instead.
+
+Everything the wizard writes is validated first — interface names and MACs
+only, in strict shapes — because `roles.conf` is sourced by shell and must
+never carry anything shell could interpret. `--demo` walks the whole wizard
+against the sample router, running nothing.
+
+## Reboot and poweroff
+
+`B` reboots and `P` powers off, each behind a typed confirm: the dialog shows
+the exact `systemctl` command and runs it only after you type the action's own
+name (`reboot` / `poweroff`). A router's power is the one thing heavier than
+any card, so a plain y/n is not enough.
 
 ## Try it without installing anything
 
@@ -46,9 +95,11 @@ tui-router --demo
 ```
 
 `--demo` drives a sample office router — two interfaces, an active firewall,
-live traffic, a dnsmasq handing out leases, a WireGuard interface with peers —
-so every card renders on a machine that has none of these backends installed.
-Nothing is read and nothing is changed.
+live traffic, a dnsmasq handing out leases, a WireGuard interface with peers,
+a pending-updates count, and an unassigned roles.conf so the roles wizard can
+be walked end to end — every card renders and every flow works on a machine
+that has none of these backends installed. Nothing is read and nothing is
+changed.
 
 ## Install
 
@@ -199,8 +250,9 @@ tui-router [flags]
 | `--sudo PREFIX` | privilege escalation prefix, e.g. `sudo -n`, or `""` to disable |
 | `--version` | print the version and exit |
 
-Keys: `↑`/`↓` select a card, `enter` opens the tool that manages it, `r`
-re-reads the router now, `?` shows help, `q` quits.
+Keys: `↑`/`↓` select a card, `enter` opens the tool that manages it, `w` opens
+the roles wizard (router profile), `B`/`P` reboot/poweroff behind a typed
+confirm, `r` re-reads the router now, `?` shows help, `q` quits.
 
 `--check` runs the read path only — never a handoff — so it is safe against a
 live router. Its exit code reports whether the tool could read, never a verdict
@@ -209,11 +261,14 @@ travel in the JSON.
 
 ## The contract
 
-tui-router is read-only. It has no mutating command of its own: every change
-belongs to the tool a card hands off to, and happens through that tool's
-preview-and-confirm. The one place this binary starts a process is its backend
-package — the read-only probes and the handoff exec — which is what the
-family's exec boundary requires.
+The cards are read-only: every per-area change belongs to the tool a card
+hands off to, through that tool's preview-and-confirm. The cockpit itself
+carries exactly three mutations — the roles wizard, reboot and poweroff — and
+each one shows the literal command line before a confirm, with the wizard's
+apply additionally staging its own timed revert first. The one place this
+binary starts a process is its backend package — the read-only probes, the
+handoff exec, and these previewed commands — which is what the family's exec
+boundary requires.
 
 The handoff is Bubble Tea's `tea.Exec`: the cockpit suspends, the child tool
 takes over the terminal, and the cockpit resumes and re-reads the machine when
