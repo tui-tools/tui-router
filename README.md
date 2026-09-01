@@ -219,7 +219,7 @@ Available once tui-router's first release lands in pkgs.tui.tools.
 ### Any distribution, static binary — coming soon
 
 ```sh
-curl -fsSL https://github.com/tui-tools/tui-router/releases/download/v{version}/tui-router_{version}_linux_amd64.tar.gz | tar -xz tui-router
+curl -fsSL https://github.com/tui-tools/tui-router/releases/download/v0.2.0/tui-router_0.2.0_linux_amd64.tar.gz | tar -xz tui-router
 sudo install -m0755 tui-router /usr/local/bin/tui-router
 ```
 
