@@ -54,6 +54,16 @@ check "check exits zero even when a managing tool is absent" \
   "sudo -n $bin --check >/dev/null; echo exit=\$?" \
   '^exit=0$'
 
+check "check carries the updates card" \
+  "sudo -n $bin --check" \
+  '"kind": "updates"'
+
+# The roles block reports whether this is a router-profile host and whether
+# the WAN/LAN roles are assigned — the state the roles wizard acts on.
+check "check reports the roles state" \
+  "sudo -n $bin --check" \
+  '"profilePresent"'
+
 # --- the report block ------------------------------------------------------
 #
 # --report is read-only and unprivileged, so it is smoked without sudo: a user

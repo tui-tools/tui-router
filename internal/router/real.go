@@ -120,6 +120,8 @@ func (r *Real) Read(ctx context.Context) (Snapshot, error) {
 	snap.Firewall = r.readFirewall(ctx)
 	snap.DHCP = r.readDHCP(ctx)
 	snap.VPN = r.readVPN(ctx)
+	snap.Updates = r.readUpdates(ctx)
+	snap.Roles = r.readRoles()
 	return snap, nil
 }
 

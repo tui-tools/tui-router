@@ -28,6 +28,8 @@ func Cards(snap Snapshot, prev *Snapshot, installed func(string) bool) []Card {
 			card = dhcpCard(snap)
 		case CardVPN:
 			card = vpnCard(snap)
+		case CardUpdates:
+			card = updatesCard(snap)
 		}
 		card.Kind = kind
 		card.Tool = CardTool[kind]
@@ -253,6 +255,31 @@ func vpnCard(snap Snapshot) Card {
 		summary += " · headscale"
 	}
 	return Card{Title: "VPN", Status: StatusOK, Summary: summary, Lines: lines}
+}
+
+// updatesCard summarises the pending updates as tui-update reported them.
+func updatesCard(snap Snapshot) Card {
+	u := snap.Updates
+	if !u.Available {
+		reason := u.Reason
+		if reason == "" {
+			reason = "tui-update not installed"
+		}
+		return Card{Title: "Updates", Status: StatusUnknown, Summary: reason}
+	}
+	if u.Pending == 0 {
+		return Card{Title: "Updates", Status: StatusOK, Summary: "up to date",
+			Lines: []string{"pending:  0"}}
+	}
+	status := StatusInfo
+	summary := strconv.Itoa(u.Pending) + " pending"
+	lines := []string{"pending:  " + strconv.Itoa(u.Pending)}
+	if u.Security > 0 {
+		status = StatusWarn
+		summary += " · " + strconv.Itoa(u.Security) + " security"
+		lines = append(lines, "security: "+strconv.Itoa(u.Security))
+	}
+	return Card{Title: "Updates", Status: status, Summary: summary, Lines: lines}
 }
 
 // humanRate renders a bytes-per-second rate in the largest unit that keeps it
