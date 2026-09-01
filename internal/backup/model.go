@@ -38,15 +38,35 @@ const (
 	SubsystemDHCPDNS   = "dhcp-dns"
 	SubsystemWireguard = "wireguard"
 	SubsystemAccounts  = "accounts"
+	// SubsystemRoles is /etc/omarchy/router/roles.conf, the WAN/LAN role
+	// assignment. Without it a restored machine has the units and the ruleset
+	// but no statement of which port plays which part, which is the one thing
+	// the router profile reads to decide what it forwards.
+	SubsystemRoles = "roles"
+	// SubsystemSysctl is the profile's forwarding knobs,
+	// /etc/sysctl.d/30-omarchy-router.conf.
+	SubsystemSysctl = "sysctl"
+	// SubsystemResolved is the profile's resolver drop-in,
+	// /etc/systemd/resolved.conf.d/30-omarchy-router.conf.
+	SubsystemResolved = "resolved"
+	// SubsystemFirewallRules is tui-firewall's own saved ruleset,
+	// /etc/omarchy/router/tui-firewall.nft. It is captured apart from the live
+	// nftables dump so a restore hands that tool back its source of truth
+	// rather than only the kernel's current state.
+	SubsystemFirewallRules = "firewall-rules"
 )
 
 // The fixed part paths for the single-file subsystems.
 const (
-	nftablesPart = partsDir + "nftables.rules"
-	dhcpDNSPart  = partsDir + "dhcp-dns.conf"
-	accountsPart = partsDir + "accounts.json"
-	networkdDir  = partsDir + "networkd/"
-	wireguardDir = partsDir + "wireguard/"
+	nftablesPart      = partsDir + "nftables.rules"
+	dhcpDNSPart       = partsDir + "dhcp-dns.conf"
+	accountsPart      = partsDir + "accounts.json"
+	rolesPart         = partsDir + "roles.conf"
+	sysctlPart        = partsDir + "sysctl.conf"
+	resolvedPart      = partsDir + "resolved.conf"
+	firewallRulesPart = partsDir + "tui-firewall.nft"
+	networkdDir       = partsDir + "networkd/"
+	wireguardDir      = partsDir + "wireguard/"
 )
 
 // Account is one router-owned user or group the profile provisions. Stage 1
@@ -87,6 +107,18 @@ type Sources struct {
 	Wireguard map[string]WGConf `json:"wireguard,omitempty"`
 	// Accounts is the router's own users/groups, names and roles only.
 	Accounts []Account `json:"accounts,omitempty"`
+	// Roles is the rendered roles.conf: which interfaces play WAN and which
+	// play LAN. It is carried as the file's own text so the restore can
+	// re-parse and re-render it through the profile's validator rather than
+	// trusting the bytes an artifact hands it.
+	Roles string `json:"roles,omitempty"`
+	// Sysctl is the profile's forwarding drop-in.
+	Sysctl string `json:"sysctl,omitempty"`
+	// Resolved is the profile's systemd-resolved drop-in.
+	Resolved string `json:"resolved,omitempty"`
+	// FirewallRules is tui-firewall's saved ruleset, when that tool manages
+	// this router's firewall.
+	FirewallRules string `json:"firewallRules,omitempty"`
 }
 
 // Meta is the identity of one export, all of it passed in from the command

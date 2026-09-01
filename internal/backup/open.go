@@ -276,6 +276,14 @@ func sourcesFromParts(m Manifest, files map[string][]byte) (Sources, error) {
 			src.Nftables = sanitizeText(string(content))
 		case SubsystemDHCPDNS:
 			src.DHCPDNS = sanitizeText(string(content))
+		case SubsystemRoles:
+			src.Roles = sanitizeText(string(content))
+		case SubsystemSysctl:
+			src.Sysctl = sanitizeText(string(content))
+		case SubsystemResolved:
+			src.Resolved = sanitizeText(string(content))
+		case SubsystemFirewallRules:
+			src.FirewallRules = sanitizeText(string(content))
 		case SubsystemNetworkd:
 			name := unitName(p.Path, networkdDir)
 			if name == "" {

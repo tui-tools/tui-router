@@ -83,7 +83,7 @@ against the sample router, running nothing.
 
 ## Reboot and poweroff
 
-`B` reboots and `P` powers off, each behind a typed confirm: the dialog shows
+`R` reboots and `P` powers off, each behind a typed confirm: the dialog shows
 the exact `systemctl` command and runs it only after you type the action's own
 name (`reboot` / `poweroff`). A router's power is the one thing heavier than
 any card, so a plain y/n is not enough.
@@ -251,8 +251,9 @@ tui-router [flags]
 | `--version` | print the version and exit |
 
 Keys: `↑`/`↓` select a card, `enter` opens the tool that manages it, `w` opens
-the roles wizard (router profile), `B`/`P` reboot/poweroff behind a typed
-confirm, `r` re-reads the router now, `?` shows help, `q` quits.
+the roles wizard (router profile), `B` opens the backup screen, `R`/`P`
+reboot/poweroff behind a typed confirm, `r` re-reads the router now, `?` shows
+help, `q` quits.
 
 `--check` runs the read path only — never a handoff — so it is safe against a
 live router. Its exit code reports whether the tool could read, never a verdict
@@ -262,10 +263,25 @@ travel in the JSON.
 ## Backup and restore
 
 `tui-router export` writes one self-describing, integrity-checked artifact that
-captures the router's identity — the nftables ruleset, the systemd-networkd
-units, the DHCP/DNS config, the WireGuard interfaces (public config only), and
-the router's own accounts (names and roles). `tui-router restore` reads that
-artifact back, previews it, and applies it after one explicit confirmation.
+captures everything a router needs to be itself again:
+
+| Subsystem | What travels |
+| --- | --- |
+| roles | `/etc/omarchy/router/roles.conf` — which ports play WAN and which play LAN |
+| networkd | the `.network` / `.link` units from `/etc/systemd/network` |
+| sysctl | `/etc/sysctl.d/30-omarchy-router.conf`, the forwarding knobs |
+| resolved | `/etc/systemd/resolved.conf.d/30-omarchy-router.conf` |
+| dhcp-dns | the dnsmasq config the router profile owns |
+| wireguard | each interface's config, **key material stripped** and referenced by path |
+| firewall-rules | tui-firewall's saved ruleset, when that tool manages this router |
+| nftables | the live ruleset, as the plain form `nft -f` reloads |
+| accounts | the router's own users and groups — names and roles only |
+
+`tui-router restore` reads that artifact back, previews it, and applies it
+after one explicit confirmation. The cockpit's `B` key runs both flows on
+screen, with the same previews and the same confirmations; the subcommands stay
+because a backup you can put in a cron job is worth more than one you can only
+press a key for.
 
 ```
 tui-router export  [--out FILE] [--sign KEY] [--demo]
@@ -289,11 +305,38 @@ into the artifact. WireGuard key material is stripped from the config and
 referenced by path — you provision it out of band — and accounts carry no
 credential hashes in this stage.
 
-`restore` never applies silently. It shows a per-subsystem preview, takes one
-confirmation, then writes the config files and reloads the nftables ruleset as
-one atomic `nft -f` transaction with a connectivity-safe rollback: the live
-ruleset is snapshotted first, and if you do not confirm you still have access,
-the ruleset reverts on its own. `--dry-run` stops after the preview.
+`restore` never applies silently. It shows a per-subsystem diff, then the exact
+reload commands it will run, then takes one typed confirmation. What runs, in
+order:
+
+1. **The config files land.** Every subsystem the artifact carries is written
+   to its fixed path — the paths are a closed set in the backend, never derived
+   from the artifact, so a crafted file cannot steer a write elsewhere.
+   `roles.conf` is re-parsed and re-rendered through the profile's own
+   validator on the way in: it is sourced by shell, so only validated interface
+   names and MACs can ever reach it.
+2. **What was written is reloaded** — `networkctl reload`, `systemctl restart
+   systemd-resolved`, `systemctl restart dnsmasq` (when dnsmasq is installed),
+   `sysctl --system`, and `wg-quick down`/`up` for each restored WireGuard
+   interface. Every one of these is previewed before the confirmation, and the
+   ones that can drop your session are marked. A file on disk that nothing
+   re-read is not a restored router.
+3. **The ruleset applies last,** as one atomic `nft -f` transaction with a
+   connectivity-safe rollback: the live ruleset is snapshotted first, and if
+   you do not confirm within 60 seconds that you still have access, it reverts
+   on its own. That is why nftables goes last — a bad ruleset is what locks an
+   operator out, and by then everything else is already in place.
+
+`--dry-run` stops after the preview.
+
+**Restoring onto different hardware.** If the artifact's `roles.conf` assigns
+roles to ports this machine does not have — a new box whose NICs are named
+`enp1s0` where the old one had `eth0` — the restore says so, names the ports
+that are missing and the ones this machine actually has, and requires a second
+confirmation typed as `different hardware` before the ordinary one. Restoring
+as-is is legal and sometimes right; it must not be an accident. Pinning roles
+by MAC in the roles wizard (`m`) is what makes an assignment survive a rename
+in the first place.
 
 ## The contract
 

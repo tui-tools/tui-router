@@ -33,6 +33,18 @@ type Fake struct {
 	dhcpDNS  string
 	rawWG    map[string]string
 	accounts []Account
+	// sysctl and resolved are the two supporting drop-ins a restore must carry
+	// for a router to forward and resolve the way it did before; firewallNFT
+	// is tui-firewall's saved ruleset, kept apart from the live nft dump. The
+	// role assignment lives in f.roles, so the demo has one roles.conf that
+	// both the wizard and the backup loop work on.
+	sysctl      string
+	resolved    string
+	firewallNFT string
+	// reloads records the previews of the reload commands a restore ran, so a
+	// test can assert the demo previews and "runs" the same sequence the real
+	// backend would.
+	reloads []string
 }
 
 // Account mirrors backup.Account for the demo backend, so the demo's seed
@@ -64,6 +76,9 @@ func NewFake() *Fake {
 			{Name: "netadmin", Role: "admin"},
 			{Name: "monitor", Role: "readonly"},
 		},
+		sysctl:      demoSysctlConf,
+		resolved:    demoResolvedConf,
+		firewallNFT: demoFirewallRules,
 	}
 }
 

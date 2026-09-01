@@ -28,6 +28,9 @@ func (a *app) View() string {
 	if a.power != nil {
 		return a.power.View(a.theme, a.width, a.height)
 	}
+	if a.bak != nil {
+		return a.bak.View(a.theme, a.width, a.height)
+	}
 	if a.mode == modeHelp {
 		return lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Center,
 			ui.HelpScreen(a.theme, "tui-router — keys", helpKeys(), a.width))
@@ -271,6 +274,7 @@ func shortHelpKeys() []ui.KeyHint {
 		{Key: "↑/↓", Desc: "select card"},
 		{Key: "↵", Desc: "open tool"},
 		{Key: "w", Desc: "roles"},
+		{Key: "B", Desc: "backup"},
 		{Key: "r", Desc: "refresh"},
 		{Key: "?", Desc: "help"},
 		{Key: "q", Desc: "quit"},
@@ -285,7 +289,8 @@ func helpKeys() []ui.KeyHint {
 		{Key: "g / G", Desc: "first / last card"},
 		{Key: "enter", Desc: "open the tool that manages the selected card"},
 		{Key: "w", Desc: "roles wizard: assign the WAN/LAN roles (router profile)"},
-		{Key: "B", Desc: "reboot the router (typed confirm)"},
+		{Key: "B", Desc: "backup: export an artifact, or restore one (typed confirm)"},
+		{Key: "R", Desc: "reboot the router (typed confirm)"},
 		{Key: "P", Desc: "power the router off (typed confirm)"},
 		{Key: "r / ctrl+r", Desc: "read the router again now"},
 		{Key: "?", Desc: "this help"},

@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"strings"
 
 	"github.com/tui-tools/tui-router/internal/backup"
 )
@@ -62,6 +63,23 @@ PrivateKey = ` + DemoWireguardSecret + `
 PublicKey = AbCdEf0123456789AbCdEf0123456789AbCdEf01234=
 AllowedIPs = 10.0.0.2/32
 `
+
+	demoSysctlConf = `net.ipv4.ip_forward=1
+net.ipv6.conf.all.forwarding=1
+`
+
+	demoResolvedConf = `[Resolve]
+DNS=192.0.2.1
+DNSStubListener=no
+`
+
+	demoFirewallRules = `# Saved by tui-firewall.
+table inet filter {
+	chain input {
+		type filter hook input priority 0; policy drop;
+	}
+}
+`
 )
 
 // Hostname names the demo router.
@@ -91,6 +109,18 @@ func (f *Fake) CollectSources(_ context.Context) (backup.Sources, error) {
 	if len(f.accounts) > 0 {
 		src.Accounts = append([]backup.Account(nil), f.accounts...)
 	}
+	// The role assignment comes from the demo's one roles.conf — the same file
+	// the wizard edits — canonicalised the way the real collector does.
+	if f.roles != nil && strings.TrimSpace(f.roles.content) != "" {
+		if canonical, err := SafeRolesConf(f.roles.content); err == nil {
+			src.Roles = canonical
+		} else {
+			src.Roles = f.roles.content
+		}
+	}
+	src.Sysctl = f.sysctl
+	src.Resolved = f.resolved
+	src.FirewallRules = f.firewallNFT
 	return src, nil
 }
 
@@ -123,8 +153,80 @@ func (f *Fake) WriteConfig(_ context.Context, subsystem, name, content string) e
 			f.rawWG = map[string]string{}
 		}
 		f.rawWG[name] = content
+	case backup.SubsystemRoles:
+		// The demo re-renders roles.conf through the profile's validator too,
+		// so --demo exercises the injection guard the real write relies on.
+		safe, err := SafeRolesConf(content)
+		if err != nil {
+			return err
+		}
+		if f.roles == nil {
+			f.roles = &fakeRoles{}
+		}
+		f.roles.content = safe
+	case backup.SubsystemSysctl:
+		f.sysctl = content
+	case backup.SubsystemResolved:
+		f.resolved = content
+	case backup.SubsystemFirewallRules:
+		f.firewallNFT = content
 	}
 	return nil
+}
+
+// ReloadPlan mirrors the real plan step for step, so --demo previews exactly
+// the sequence a real restore would run — with every line marked as the demo's,
+// and nothing behind it.
+func (f *Fake) ReloadPlan(target backup.Sources) []ReloadStep {
+	var steps []ReloadStep
+	add := func(argv []string, description string, destructive bool) {
+		steps = append(steps, ReloadStep{
+			Argv:        argv,
+			Preview:     strings.Join(argv, " ") + " (demo: not run)",
+			Description: description,
+			Destructive: destructive,
+		})
+	}
+	if len(target.Networkd) > 0 || strings.TrimSpace(target.Roles) != "" {
+		add([]string{"networkctl", "reload"},
+			"Re-read the .network units the restore wrote", true)
+	}
+	if strings.TrimSpace(target.Resolved) != "" {
+		add([]string{"systemctl", "restart", "systemd-resolved"},
+			"Pick up the restored resolver drop-in", false)
+	}
+	if strings.TrimSpace(target.DHCPDNS) != "" {
+		add([]string{"systemctl", "restart", "dnsmasq"},
+			"Pick up the restored DHCP/DNS config", false)
+	}
+	if strings.TrimSpace(target.Sysctl) != "" {
+		add([]string{"sysctl", "--system"}, "Apply the restored forwarding knobs", false)
+	}
+	for _, name := range sortedWireguardNames(target.Wireguard) {
+		add([]string{"wg-quick", "down", name},
+			"Take "+name+" down before its restored config is read", true)
+		add([]string{"wg-quick", "up", name},
+			"Bring "+name+" up on the restored config", true)
+	}
+	return steps
+}
+
+// RunReload records the step and runs nothing.
+func (f *Fake) RunReload(_ context.Context, step ReloadStep) error {
+	f.reloads = append(f.reloads, strings.Join(step.Argv, " "))
+	return nil
+}
+
+// Reloads is what the demo pretended to reload, for the round-trip test.
+func (f *Fake) Reloads() []string { return append([]string(nil), f.reloads...) }
+
+// LinkNames reports the demo router's NIC names.
+func (f *Fake) LinkNames(_ context.Context) ([]string, error) {
+	var names []string
+	for _, iface := range demoInterfaces() {
+		names = append(names, iface.Name)
+	}
+	return names, nil
 }
 
 // ApplyAccounts records the accounts in the demo's state.

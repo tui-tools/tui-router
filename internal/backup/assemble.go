@@ -87,6 +87,26 @@ func partFiles(src Sources) []fileEntry {
 		})
 	}
 
+	// The four supporting config files: the role assignment the profile reads,
+	// the forwarding and resolver drop-ins, and tui-firewall's saved ruleset.
+	// Each is a single text file, emitted only when the router has one.
+	for _, single := range []struct {
+		path, subsystem, content string
+	}{
+		{rolesPart, SubsystemRoles, src.Roles},
+		{sysctlPart, SubsystemSysctl, src.Sysctl},
+		{resolvedPart, SubsystemResolved, src.Resolved},
+		{firewallRulesPart, SubsystemFirewallRules, src.FirewallRules},
+	} {
+		if strings.TrimSpace(single.content) == "" {
+			continue
+		}
+		parts = append(parts, fileEntry{
+			path: single.path, subsystem: single.subsystem,
+			data: []byte(ensureTrailingNewline(single.content)),
+		})
+	}
+
 	for _, name := range sortedKeys(src.Networkd) {
 		parts = append(parts, fileEntry{
 			path: networkdDir + name, subsystem: SubsystemNetworkd,

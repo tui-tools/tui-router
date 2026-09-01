@@ -25,6 +25,46 @@ func sampleSources() Sources {
 			"wg0": {Config: "[Interface]\nAddress = 10.0.0.1/24\n", KeyRef: "/etc/wireguard/wg0.key"},
 		},
 		Accounts: []Account{{Name: "netadmin", Role: "admin"}},
+		// The four supporting files stage 1.1 added. They are part of the
+		// shared sample so every assemble/verify/preview test covers them.
+		Roles:         "WAN_IFS=\"wan0\"\nLAN_IFS=\"lan0\"\n",
+		Sysctl:        "net.ipv4.ip_forward=1\n",
+		Resolved:      "[Resolve]\nDNSStubListener=no\n",
+		FirewallRules: "# saved by tui-firewall\ntable inet filter {\n}\n",
+	}
+}
+
+// TestSupportingFilesRoundTrip asserts each of the four supporting files lands
+// as its own labelled part and comes back as itself — a restore that has the
+// units and the ruleset but not these reproduces a router that forwards
+// nothing, which is the gap stage 1.1 closed.
+func TestSupportingFilesRoundTrip(t *testing.T) {
+	data, err := Assemble(sampleSources(), sampleMeta(), nil)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	art, err := Open(data, nil)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	for _, want := range []struct{ subsystem, got, expect string }{
+		{SubsystemRoles, art.Sources.Roles, sampleSources().Roles},
+		{SubsystemSysctl, art.Sources.Sysctl, sampleSources().Sysctl},
+		{SubsystemResolved, art.Sources.Resolved, sampleSources().Resolved},
+		{SubsystemFirewallRules, art.Sources.FirewallRules, sampleSources().FirewallRules},
+	} {
+		if want.got != want.expect {
+			t.Errorf("%s came back as %q, want %q", want.subsystem, want.got, want.expect)
+		}
+		var found bool
+		for _, p := range art.Manifest.Parts {
+			if p.Subsystem == want.subsystem {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("the manifest carries no %s part", want.subsystem)
+		}
 	}
 }
 

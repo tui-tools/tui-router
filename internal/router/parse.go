@@ -33,6 +33,26 @@ type ipRoute struct {
 	Scope string `json:"scope"`
 }
 
+// ParseLinkNames turns `ip -j link` into the plain list of interface names
+// this machine carries. It is what a restore compares an artifact's roles.conf
+// against: the loopback is dropped, because no role is ever assigned to it. A
+// payload it cannot read yields no names, and the caller says the comparison
+// was not possible rather than claiming the names matched.
+func ParseLinkNames(linkJSON string) []string {
+	var links []ipAddr
+	if err := json.Unmarshal([]byte(linkJSON), &links); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(links))
+	for _, l := range links {
+		if l.IfName == "" || l.IfName == "lo" {
+			continue
+		}
+		out = append(out, l.IfName)
+	}
+	return out
+}
+
 // ParseInterfaces turns `ip -j addr` and `ip -j route` into the interface
 // list, tagging each interface's role from the routing table: an interface
 // carrying a default route is WAN, one with a directly attached subnet is LAN,

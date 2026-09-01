@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/tui-tools/tui-kit/runner"
@@ -20,6 +21,26 @@ const (
 	wireguardEtcDir   = "/etc/wireguard"
 	dnsmasqRouterConf = "/etc/dnsmasq.d/router.conf"
 	dnsmasqMainConf   = "/etc/dnsmasq.conf"
+	// sysctlRouterConf is the profile's forwarding drop-in: without it a
+	// restored machine has every rule and unit but forwards nothing.
+	sysctlRouterConf = "/etc/sysctl.d/30-omarchy-router.conf"
+	// resolvedRouterConf is the profile's systemd-resolved drop-in.
+	resolvedRouterConf = "/etc/systemd/resolved.conf.d/30-omarchy-router.conf"
+	// firewallRulesPath is tui-firewall's saved ruleset, kept in the router
+	// profile's own directory. It is captured when that tool manages this
+	// machine's firewall, so a restore gives it back its source of truth.
+	firewallRulesPath = RolesDir + "/tui-firewall.nft"
+)
+
+// Search paths for the binaries a restore's reload step needs. They are only
+// ever used to build a previewed command; a machine that lacks one simply gets
+// no step for it.
+var (
+	networkctlSearchPaths = []string{"/usr/bin/networkctl", "/bin/networkctl"}
+	sysctlSearchPaths     = []string{"/usr/sbin/sysctl", "/sbin/sysctl", "/usr/bin/sysctl"}
+	wgQuickSearchPaths    = []string{"/usr/bin/wg-quick", "/bin/wg-quick"}
+	systemctlSearchPaths  = []string{"/usr/bin/systemctl", "/bin/systemctl"}
+	dnsmasqSearchPaths    = []string{"/usr/sbin/dnsmasq", "/usr/bin/dnsmasq"}
 )
 
 // Hostname names this machine for an export.
@@ -45,6 +66,23 @@ func (r *Real) CollectSources(ctx context.Context) (backup.Sources, error) {
 	src.Networkd = readDirFiles(networkdEtcDir, ".network", ".link")
 	src.DHCPDNS = readFirstFile(dnsmasqRouterConf, dnsmasqMainConf)
 	src.Wireguard = collectWireguard()
+	// The four supporting files. roles.conf goes through the profile's own
+	// parser and renderer on the way in, so what the artifact carries is the
+	// canonical form — two exports of the same assignment are byte-identical
+	// even if one machine's file was hand-edited.
+	if raw := readFirstFile(RolesConfPath); strings.TrimSpace(raw) != "" {
+		if canonical, err := SafeRolesConf(raw); err == nil {
+			src.Roles = canonical
+		} else {
+			// A roles.conf this tool would not write back is still worth
+			// capturing verbatim: the export records the machine, and the
+			// restore refuses it there, where the operator can see why.
+			src.Roles = raw
+		}
+	}
+	src.Sysctl = readFirstFile(sysctlRouterConf)
+	src.Resolved = readFirstFile(resolvedRouterConf)
+	src.FirewallRules = readFirstFile(firewallRulesPath)
 	// Account enumeration is deferred to a later stage: the profile's own list
 	// of router users is not yet declared, so a real export carries no
 	// accounts rather than guessing at which of the machine's users are the
@@ -113,6 +151,15 @@ func (r *Real) WriteConfig(ctx context.Context, subsystem, name, content string)
 	if err != nil {
 		return err
 	}
+	if subsystem == backup.SubsystemRoles {
+		// roles.conf is sourced by bash. Never write an artifact's bytes into
+		// it: re-parse and re-render them, so only validated interface names
+		// and MACs can reach the file.
+		content, err = SafeRolesConf(content)
+		if err != nil {
+			return err
+		}
+	}
 	if r.tee == nil || r.tee.Bin == "" {
 		return errors.New("tee is not available to write config files")
 	}
@@ -162,6 +209,14 @@ func configPath(subsystem, name string) (string, error) {
 		return safeJoin(wireguardEtcDir, name+".conf")
 	case backup.SubsystemDHCPDNS:
 		return dnsmasqRouterConf, nil
+	case backup.SubsystemRoles:
+		return RolesConfPath, nil
+	case backup.SubsystemSysctl:
+		return sysctlRouterConf, nil
+	case backup.SubsystemResolved:
+		return resolvedRouterConf, nil
+	case backup.SubsystemFirewallRules:
+		return firewallRulesPath, nil
 	default:
 		return "", fmt.Errorf("no config path for subsystem %q", subsystem)
 	}
@@ -208,6 +263,124 @@ func (r *Real) ApplyAccounts(ctx context.Context, accounts []backup.Account) err
 		})
 	}
 	return nil
+}
+
+// ReloadPlan builds the ordered list of commands that make a restore's config
+// files take effect. It is derived from the artifact, so a restore that
+// carried no resolver drop-in never previews a resolved restart, and a machine
+// without dnsmasq never previews a dnsmasq restart. Every step is rendered
+// through the runner that will execute it, so the preview is the command.
+//
+// The order matters: the links come up first, then the services that bind to
+// them, then the forwarding knobs, then the WireGuard interfaces that ride on
+// top. The nftables ruleset is not here — it goes last, through the
+// connectivity-safe keep-or-rollback flow the command layer drives.
+func (r *Real) ReloadPlan(target backup.Sources) []ReloadStep {
+	var steps []ReloadStep
+
+	add := func(bin string, searchPaths []string, argv []string, description string, destructive bool) {
+		if !runner.Available(bin, searchPaths...) {
+			return
+		}
+		step := ReloadStep{Argv: argv, Description: description, Destructive: destructive}
+		if rr, err := r.mutRunner(bin, searchPaths...); err == nil {
+			step.Preview = rr.Preview(runner.Command{
+				Argv: argv, Description: description, Destructive: destructive})
+		} else {
+			step.Preview = strings.Join(argv, " ")
+		}
+		steps = append(steps, step)
+	}
+
+	if len(target.Networkd) > 0 || strings.TrimSpace(target.Roles) != "" {
+		add("networkctl", networkctlSearchPaths,
+			[]string{"networkctl", "reload"},
+			"Re-read the .network units the restore wrote", true)
+	}
+	if strings.TrimSpace(target.Resolved) != "" {
+		add("systemctl", systemctlSearchPaths,
+			[]string{"systemctl", "restart", "systemd-resolved"},
+			"Pick up the restored resolver drop-in", false)
+	}
+	if strings.TrimSpace(target.DHCPDNS) != "" && runner.Available("dnsmasq", dnsmasqSearchPaths...) {
+		add("systemctl", systemctlSearchPaths,
+			[]string{"systemctl", "restart", "dnsmasq"},
+			"Pick up the restored DHCP/DNS config", false)
+	}
+	if strings.TrimSpace(target.Sysctl) != "" {
+		add("sysctl", sysctlSearchPaths,
+			[]string{"sysctl", "--system"},
+			"Apply the restored forwarding knobs", false)
+	}
+	for _, name := range sortedWireguardNames(target.Wireguard) {
+		// A tunnel whose config changed has to be bounced to read it. Down
+		// first, then up: wg-quick has no reload, and an interface that was
+		// not up simply fails the down, which the caller tolerates.
+		add("wg-quick", wgQuickSearchPaths,
+			[]string{"wg-quick", "down", name},
+			"Take "+name+" down before its restored config is read", true)
+		add("wg-quick", wgQuickSearchPaths,
+			[]string{"wg-quick", "up", name},
+			"Bring "+name+" up on the restored config", true)
+	}
+	return steps
+}
+
+// RunReload executes one previewed step. A wg-quick down on an interface that
+// was not up is not a failure of the restore — the point of the down is to
+// guarantee the following up reads the new config — so it is reported as
+// tolerated rather than propagated.
+func (r *Real) RunReload(ctx context.Context, step ReloadStep) error {
+	if len(step.Argv) == 0 {
+		return errors.New("reload step has no command")
+	}
+	bin := step.Argv[0]
+	var searchPaths []string
+	switch bin {
+	case "networkctl":
+		searchPaths = networkctlSearchPaths
+	case "systemctl":
+		searchPaths = systemctlSearchPaths
+	case "sysctl":
+		searchPaths = sysctlSearchPaths
+	case "wg-quick":
+		searchPaths = wgQuickSearchPaths
+	default:
+		return fmt.Errorf("%q is not one of the reload commands this tool runs", bin)
+	}
+	rr, err := r.mutRunner(bin, searchPaths...)
+	if err != nil {
+		return err
+	}
+	_, err = rr.Run(ctx, runner.Command{
+		Argv: step.Argv, Description: step.Description, Destructive: step.Destructive})
+	if err != nil && bin == "wg-quick" && len(step.Argv) > 1 && step.Argv[1] == "down" {
+		return nil
+	}
+	return err
+}
+
+// LinkNames reads `ip -j link` for the names this machine's NICs carry now.
+func (r *Real) LinkNames(ctx context.Context) ([]string, error) {
+	if r.ip == nil || r.ip.Bin == "" {
+		return nil, errors.New("iproute2 is not available to list the interfaces")
+	}
+	out, err := r.ip.Read(ctx, "ip", "-j", "link")
+	if err != nil {
+		return nil, err
+	}
+	return ParseLinkNames(out), nil
+}
+
+// sortedWireguardNames orders the artifact's WireGuard interfaces, so the
+// reload plan is the same list every time it is previewed.
+func sortedWireguardNames(m map[string]backup.WGConf) []string {
+	names := make([]string, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // readDirFiles reads every file in dir whose name ends in one of the suffixes,

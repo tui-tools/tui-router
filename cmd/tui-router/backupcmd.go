@@ -114,19 +114,28 @@ func runExport(args []string, stamp string, out io.Writer) error {
 	if signer != nil {
 		signed = "yes"
 	}
+	parts := countParts(src)
+	_, _ = fmt.Fprintf(out, "wrote %s — %d parts, %d bytes, signed: %s\n",
+		outPath, parts, len(data), signed)
+	return nil
+}
+
+// countParts is how many files an export of these Sources will carry. It is
+// what the export summary reports and what the cockpit's export plan previews,
+// so the two can never disagree about what is in the artifact.
+func countParts(src backup.Sources) int {
 	parts := len(src.Networkd) + len(src.Wireguard)
-	if strings.TrimSpace(src.Nftables) != "" {
-		parts++
-	}
-	if strings.TrimSpace(src.DHCPDNS) != "" {
-		parts++
+	for _, single := range []string{
+		src.Nftables, src.DHCPDNS, src.Roles, src.Sysctl, src.Resolved, src.FirewallRules,
+	} {
+		if strings.TrimSpace(single) != "" {
+			parts++
+		}
 	}
 	if len(src.Accounts) > 0 {
 		parts++
 	}
-	_, _ = fmt.Fprintf(out, "wrote %s — %d parts, %d bytes, signed: %s\n",
-		outPath, parts, len(data), signed)
-	return nil
+	return parts
 }
 
 // runRestore opens an artifact, previews it, and — outside --dry-run and after
@@ -197,6 +206,15 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 	_, _ = fmt.Fprintf(out, "integrity: checksums verified\n")
 	_, _ = fmt.Fprintf(out, "signature: %s\n", signatureStatus(art, verifier != nil))
 	_, _ = fmt.Fprintf(out, "\nPreview (what a restore would apply):\n%s\n", preview.String())
+	_, _ = fmt.Fprintf(out, "\nThen these commands run, in order ('!' may drop your session):\n%s\n",
+		reloadPlanBlock(backend.ReloadPlan(art.Sources)))
+	_, _ = fmt.Fprintln(out, "\nFinally the nftables ruleset is applied as one atomic transaction,\n"+
+		"with a keep-or-rollback confirmation.")
+
+	warning := deviceWarning(ctx, backend, art.Sources)
+	if warning != "" {
+		_, _ = fmt.Fprintf(out, "\nWARNING — the hardware does not match:\n%s\n", warning)
+	}
 
 	if dryRun {
 		_, _ = fmt.Fprintln(out, "\n--dry-run: nothing was applied.")
@@ -207,9 +225,22 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 		return nil
 	}
 
-	_, _ = fmt.Fprint(out, "\nApply these changes? This will write config and reload the ruleset.\n"+
-		"Type 'yes' to continue: ")
 	reader := bufio.NewReader(in)
+	if warning != "" {
+		// A hardware mismatch is its own decision, taken before the ordinary
+		// apply confirmation: the operator says out loud that they mean to
+		// restore onto different NICs.
+		_, _ = fmt.Fprint(out, "\nRestore onto this different hardware anyway?\n"+
+			"Type 'different hardware' to continue: ")
+		answer, _ := reader.ReadString('\n')
+		if strings.TrimSpace(answer) != "different hardware" {
+			_, _ = fmt.Fprintln(out, "Aborted; nothing was applied.")
+			return nil
+		}
+	}
+
+	_, _ = fmt.Fprint(out, "\nApply these changes? This will write config, reload the services\n"+
+		"above and reload the ruleset.\nType 'yes' to continue: ")
 	answer, _ := reader.ReadString('\n')
 	if strings.TrimSpace(answer) != "yes" {
 		_, _ = fmt.Fprintln(out, "Aborted; nothing was applied.")
@@ -226,6 +257,24 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 // the single apply engine both the command and the round-trip test drive.
 func applyRestore(ctx context.Context, backend router.BackupBackend, target backup.Sources,
 	keepTimeout time.Duration, keep keepConfirmFunc, out io.Writer) error {
+
+	// The single-file subsystems, in the order a router is built up: what the
+	// machine is for (roles.conf), then how it forwards and resolves, then the
+	// services that serve the LAN and the firewall tool's own saved ruleset.
+	for _, single := range []struct{ subsystem, label, content string }{
+		{backup.SubsystemRoles, "roles.conf", target.Roles},
+		{backup.SubsystemSysctl, "sysctl drop-in", target.Sysctl},
+		{backup.SubsystemResolved, "resolved drop-in", target.Resolved},
+		{backup.SubsystemFirewallRules, "tui-firewall saved ruleset", target.FirewallRules},
+	} {
+		if strings.TrimSpace(single.content) == "" {
+			continue
+		}
+		if err := backend.WriteConfig(ctx, single.subsystem, "", single.content); err != nil {
+			return fmt.Errorf("writing the %s: %w", single.label, err)
+		}
+		_, _ = fmt.Fprintf(out, "  wrote %s\n", single.label)
+	}
 
 	for _, name := range sortedKeys(target.Networkd) {
 		if err := backend.WriteConfig(ctx, backup.SubsystemNetworkd, name, target.Networkd[name]); err != nil {
@@ -252,10 +301,82 @@ func applyRestore(ctx context.Context, backend router.BackupBackend, target back
 		_, _ = fmt.Fprintf(out, "  ensured %d account(s), no credential set\n", len(target.Accounts))
 	}
 
+	// A file on disk changes nothing until something re-reads it, so the
+	// restore reloads what it just wrote — the same previewed commands the
+	// confirm showed, in the same order.
+	if err := runReloads(ctx, backend, target, out); err != nil {
+		return err
+	}
+
 	if strings.TrimSpace(target.Nftables) == "" {
 		return nil
 	}
 	return applyNftables(ctx, backend, target.Nftables, keepTimeout, keep, out)
+}
+
+// runReloads runs the backend's reload plan. A step that fails is reported and
+// the rest still run: half a restore that reloaded nothing is worse than one
+// that reloaded what it could and said which step did not take.
+func runReloads(ctx context.Context, backend router.BackupBackend,
+	target backup.Sources, out io.Writer) error {
+
+	steps := backend.ReloadPlan(target)
+	if len(steps) == 0 {
+		return nil
+	}
+	var failed []string
+	for _, step := range steps {
+		if err := backend.RunReload(ctx, step); err != nil {
+			failed = append(failed, step.String())
+			_, _ = fmt.Fprintf(out, "  reload FAILED: %s (%v)\n", step.String(), err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "  reloaded: %s\n", step.String())
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("%d reload step(s) failed: %s", len(failed), strings.Join(failed, "; "))
+	}
+	return nil
+}
+
+// reloadPlanBlock renders the reload plan for the restore preview: the exact
+// commands, in order, that will run once the config files land.
+func reloadPlanBlock(steps []router.ReloadStep) string {
+	if len(steps) == 0 {
+		return "  (nothing to reload — the artifact carries no config file that needs one)"
+	}
+	var b strings.Builder
+	for _, step := range steps {
+		mark := " "
+		if step.Destructive {
+			mark = "!"
+		}
+		fmt.Fprintf(&b, "  %s $ %s\n", mark, step.String())
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// deviceWarning reports the interface names an artifact's roles.conf assigns
+// that this machine does not have, as the block the extra confirmation shows.
+// It returns "" when every named device is present, and says so plainly when
+// the machine's own interface list could not be read.
+func deviceWarning(ctx context.Context, backend router.BackupBackend, target backup.Sources) string {
+	if strings.TrimSpace(target.Roles) == "" {
+		return ""
+	}
+	present, err := backend.LinkNames(ctx)
+	if err != nil {
+		return "This machine's interface list could not be read (" + err.Error() + "),\n" +
+			"so the artifact's WAN/LAN device names could not be checked against it."
+	}
+	missing := router.MissingRoleDevices(target.Roles, present)
+	if len(missing) == 0 {
+		return ""
+	}
+	return "The artifact assigns roles to " + strings.Join(missing, ", ") +
+		",\nwhich this machine does not have (it has: " + strings.Join(present, ", ") + ").\n" +
+		"Restoring as-is leaves those roles pointing at ports that do not exist,\n" +
+		"and the router forwards nothing until you re-run the roles wizard."
 }
 
 // applyNftables installs the ruleset atomically, then either keeps it on the

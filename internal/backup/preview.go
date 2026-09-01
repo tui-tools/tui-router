@@ -42,8 +42,14 @@ type Preview struct {
 // artifact's target Sources.
 func Diff(current, target Sources) Preview {
 	var p Preview
+	// Roles first: it is the file that says what the machine is for, and the
+	// operator should read that line before the ones that implement it.
+	p.add(SubsystemRoles, "roles.conf", current.Roles, target.Roles)
 	p.add(SubsystemNftables, "ruleset", current.Nftables, target.Nftables)
 	p.add(SubsystemDHCPDNS, "config", current.DHCPDNS, target.DHCPDNS)
+	p.add(SubsystemSysctl, "forwarding", current.Sysctl, target.Sysctl)
+	p.add(SubsystemResolved, "drop-in", current.Resolved, target.Resolved)
+	p.add(SubsystemFirewallRules, "saved ruleset", current.FirewallRules, target.FirewallRules)
 	p.addMap(SubsystemNetworkd, current.Networkd, target.Networkd)
 	p.addWG(current.Wireguard, target.Wireguard)
 	p.addAccounts(current.Accounts, target.Accounts)
