@@ -285,7 +285,7 @@ press a key for.
 
 ```
 tui-router export  [--out FILE] [--sign KEY] [--demo]
-tui-router restore FILE [--verify PUBKEY] [--dry-run] [--demo]
+tui-router restore FILE [--verify PUBKEY] [--dry-run] [--keep] [--demo]
 ```
 
 | Flag | What it does |
@@ -294,6 +294,7 @@ tui-router restore FILE [--verify PUBKEY] [--dry-run] [--demo]
 | `export --sign KEY` | add a detached Ed25519 signature over the checksum file |
 | `restore --verify PUBKEY` | require a valid signature from this public key |
 | `restore --dry-run` | verify and preview only; apply nothing |
+| `restore --keep` | keep the restored ruleset without the connectivity confirmation |
 | `--demo` | run the whole loop against the in-memory sample router, no root |
 
 The artifact is a gzip'd tar (`.tuiback`) with a `manifest.json`, one part per
@@ -328,6 +329,13 @@ order:
    operator out, and by then everything else is already in place.
 
 `--dry-run` stops after the preview.
+
+**Scripted restores.** The keep confirmation is read from stdin, so
+`printf 'yes\nkeep\n' | tui-router restore FILE` works. A restore nobody is
+sitting in front of can skip the 60-second window with `--keep`, which keeps
+the ruleset the moment it applies. It is for scripted restores or a local
+console: it bypasses the connectivity guard, so only use it when you can reach
+the box another way. Without it the default is unchanged — silence rolls back.
 
 **Restoring onto different hardware.** If the artifact's `roles.conf` assigns
 roles to ports this machine does not have — a new box whose NICs are named

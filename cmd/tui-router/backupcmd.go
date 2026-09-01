@@ -144,13 +144,17 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
 	fs.SetOutput(out)
 	var verifyKey, sudo string
-	var dryRun, demo bool
+	var dryRun, demo, keepRuleset bool
 	fs.StringVar(&verifyKey, "verify", "", "require a valid signature from the Ed25519 public key in this file")
 	fs.BoolVar(&dryRun, "dry-run", false, "verify and preview only; apply nothing")
+	fs.BoolVar(&keepRuleset, "keep", false,
+		"keep the restored ruleset without the connectivity confirmation "+
+			"(for scripted restores or a local console; it bypasses the connectivity guard, "+
+			"so only use it when you can reach the box another way)")
 	fs.BoolVar(&demo, "demo", false, "restore into the in-memory sample router, no root needed")
 	fs.StringVar(&sudo, "sudo", "", "privilege escalation prefix, e.g. \"sudo -n\" or \"\" to disable")
 	fs.Usage = func() {
-		_, _ = fmt.Fprintf(out, "tui-router restore FILE [--verify PUBKEY] [--dry-run] [--demo]\n\n"+
+		_, _ = fmt.Fprintf(out, "tui-router restore FILE [--verify PUBKEY] [--dry-run] [--keep] [--demo]\n\n"+
 			"Verify an artifact, preview it, and apply it after one confirmation.\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
@@ -247,7 +251,15 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 		return nil
 	}
 
-	keep := interactiveKeepConfirm(in, out, backup.DefaultKeepTimeout)
+	// --keep answers the connectivity question up front, for a restore nobody
+	// is sitting in front of. Otherwise the operator answers it live, on the
+	// same reader the confirmations above were read from — a second reader
+	// over the same stream would find the buffered bytes already gone, which
+	// is exactly how a piped `keep` used to be lost.
+	keep := interactiveKeepConfirm(reader, out, backup.DefaultKeepTimeout)
+	if keepRuleset {
+		keep = preConfirmedKeep(out)
+	}
 	return applyRestore(ctx, backend, art.Sources, backup.DefaultKeepTimeout, keep, out)
 }
 
@@ -414,13 +426,19 @@ func applyNftables(ctx context.Context, backend router.BackupBackend, ruleset st
 // the ruleset applies, the operator has keepTimeout to type 'keep'; silence or
 // anything else rolls back, which is what saves an operator who just cut their
 // own session.
-func interactiveKeepConfirm(in io.Reader, out io.Writer, keepTimeout time.Duration) keepConfirmFunc {
+//
+// It reads from the reader the earlier confirmations used rather than opening
+// its own over the same stream. A bufio.Reader buffers ahead, so a second one
+// wrapping the same pipe finds nothing left: that is what silently swallowed
+// the `keep` line of a `printf 'yes\nkeep\n' | tui-router restore` and rolled
+// every scripted restore back.
+func interactiveKeepConfirm(reader *bufio.Reader, out io.Writer, keepTimeout time.Duration) keepConfirmFunc {
 	return func() bool {
 		_, _ = fmt.Fprintf(out, "\n  The new ruleset is live. Type 'keep' within %s to keep it,\n"+
 			"  or the ruleset rolls back automatically: ", keepTimeout)
 		answerCh := make(chan string, 1)
 		go func() {
-			line, _ := bufio.NewReader(in).ReadString('\n')
+			line, _ := reader.ReadString('\n')
 			answerCh <- strings.TrimSpace(line)
 		}()
 		select {
@@ -430,6 +448,19 @@ func interactiveKeepConfirm(in io.Reader, out io.Writer, keepTimeout time.Durati
 			_, _ = fmt.Fprintln(out, "\n  (timed out)")
 			return false
 		}
+	}
+}
+
+// preConfirmedKeep is --keep: the operator said before the restore started
+// that the ruleset is to stay. It skips the keep window entirely rather than
+// answering it, and says on the way past that the guard is not in force — a
+// restore that silently dropped the safety net would be worse than one that
+// never had it.
+func preConfirmedKeep(out io.Writer) keepConfirmFunc {
+	return func() bool {
+		_, _ = fmt.Fprintln(out, "\n  --keep: keeping the ruleset without the connectivity"+
+			" confirmation.\n  The rollback guard is not in force for this restore.")
+		return true
 	}
 }
 

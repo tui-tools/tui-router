@@ -170,6 +170,81 @@ func TestRestoreRefusesDifferentHardwareWithoutTheExtraConfirm(t *testing.T) {
 	}
 }
 
+// rulesetArtifact writes an artifact carrying only a ruleset the demo router
+// does not have, so a restore of it reaches the nftables keep step with
+// nothing else in the way.
+func rulesetArtifact(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ruleset.tuiback")
+	data, err := backup.Assemble(
+		backup.Sources{Nftables: "table inet filter {\n\tchain input {\n\t\ttcp dport 4242 accept\n\t}\n}\n"},
+		backup.Meta{ToolVersion: "test", Hostname: "lab-router", Timestamp: "x"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRawFile(t, path, data)
+	return path
+}
+
+// TestRestoreKeepFlagSkipsTheConnectivityWindow is the lab finding: a scripted
+// restore has nobody to answer the keep prompt, so --keep answers it up front.
+// The ruleset must survive, and the run must say the guard was not in force.
+func TestRestoreKeepFlagSkipsTheConnectivityWindow(t *testing.T) {
+	artifact := rulesetArtifact(t)
+	var out bytes.Buffer
+	// Stdin carries the apply confirmation and nothing else — exactly what a
+	// script pipes in.
+	if err := runRestore([]string{"--demo", "--keep", artifact},
+		strings.NewReader("yes\n"), &out); err != nil {
+		t.Fatalf("restore --keep: %v\n%s", err, out.String())
+	}
+	text := out.String()
+	if strings.Contains(text, "rolled back") {
+		t.Errorf("--keep still rolled the ruleset back:\n%s", text)
+	}
+	for _, want := range []string{"applied the nftables ruleset", "--keep", "not in force"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the --keep run does not report %q:\n%s", want, text)
+		}
+	}
+}
+
+// TestRestoreReadsPipedKeepFromTheSameStream is the root cause behind the lab
+// finding: the keep prompt used to open a second reader over stdin, and the
+// first one had already buffered the whole pipe, so a piped `keep` was lost
+// and every scripted restore rolled back. Without --keep, a piped `keep` must
+// be read and honoured.
+func TestRestoreReadsPipedKeepFromTheSameStream(t *testing.T) {
+	artifact := rulesetArtifact(t)
+	var out bytes.Buffer
+	if err := runRestore([]string{"--demo", artifact},
+		strings.NewReader("yes\nkeep\n"), &out); err != nil {
+		t.Fatalf("piped restore: %v\n%s", err, out.String())
+	}
+	text := out.String()
+	if strings.Contains(text, "rolled back") {
+		t.Errorf("a piped 'keep' was not read; the ruleset rolled back:\n%s", text)
+	}
+	if !strings.Contains(text, "ruleset kept") {
+		t.Errorf("the restore did not report the ruleset kept:\n%s", text)
+	}
+}
+
+// TestRestoreWithoutKeepStillRollsBack pins the default down: the connectivity
+// guard is unchanged for an operator who answers nothing. --keep must be the
+// only way past it.
+func TestRestoreWithoutKeepStillRollsBack(t *testing.T) {
+	artifact := rulesetArtifact(t)
+	var out bytes.Buffer
+	err := runRestore([]string{"--demo", artifact}, strings.NewReader("yes\n"), &out)
+	if err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("an unanswered keep must roll back, got %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "rolled back to the pre-restore snapshot") {
+		t.Errorf("the rollback was not reported:\n%s", out.String())
+	}
+}
+
 // TestCockpitBackupKeyOpensTheScreen asserts b reaches the backup screen and
 // that the screen names both flows.
 func TestCockpitBackupKeyOpensTheScreen(t *testing.T) {
