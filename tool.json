@@ -191,6 +191,5 @@
     "cockpit",
     "network",
     "overview"
-  ],
-  "unreleased": true
+  ]
 }
