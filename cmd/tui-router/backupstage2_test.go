@@ -170,7 +170,7 @@ func TestRestoreRefusesDifferentHardwareWithoutTheExtraConfirm(t *testing.T) {
 	}
 }
 
-// TestCockpitBackupKeyOpensTheScreen asserts B reaches the backup screen and
+// TestCockpitBackupKeyOpensTheScreen asserts b reaches the backup screen and
 // that the screen names both flows.
 func TestCockpitBackupKeyOpensTheScreen(t *testing.T) {
 	fake := router.NewFake()
@@ -181,14 +181,42 @@ func TestCockpitBackupKeyOpensTheScreen(t *testing.T) {
 	a.cur = &snap
 	a.rebuild()
 
-	model, _ := a.Update(keyRunes("B"))
+	model, _ := a.Update(keyRunes("b"))
 	a = model.(*app)
 	if a.bak == nil {
-		t.Fatal("B should open the backup screen")
+		t.Fatal("b should open the backup screen")
 	}
 	view := a.View()
 	if !strings.Contains(view, "export") || !strings.Contains(view, "restore") {
 		t.Errorf("the backup menu must offer both flows:\n%s", view)
+	}
+}
+
+// TestCockpitBackupAndRebootKeysAreDistinct pins the case pair down: b is the
+// backup screen and B is still the reboot confirm that shipped in v0.2.0.
+// They are one keystroke apart and one of them reboots a router, so the split
+// is worth a test of its own rather than only living in the help text.
+func TestCockpitBackupAndRebootKeysAreDistinct(t *testing.T) {
+	newCockpit := func() *app {
+		fake := router.NewFake()
+		a := newApp(fake, theme.New(), nil)
+		a.width, a.height = 120, 40
+		snap, _ := fake.Read(context.Background())
+		a.loading = false
+		a.cur = &snap
+		a.rebuild()
+		return a
+	}
+
+	lower, _ := newCockpit().Update(keyRunes("b"))
+	if a := lower.(*app); a.bak == nil || a.power != nil {
+		t.Errorf("b must open the backup screen and nothing else (bak=%v power=%v)",
+			a.bak != nil, a.power != nil)
+	}
+	upper, _ := newCockpit().Update(keyRunes("B"))
+	if a := upper.(*app); a.power == nil || a.bak != nil {
+		t.Errorf("B must stay the reboot confirm (bak=%v power=%v)",
+			a.bak != nil, a.power != nil)
 	}
 }
 

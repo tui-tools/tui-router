@@ -42,11 +42,11 @@
       "action": "Roles wizard: assign the WAN/LAN roles (router profile)"
     },
     {
-      "key": "B",
+      "key": "b",
       "action": "Backup: export an artifact, or restore one (typed confirm)"
     },
     {
-      "key": "R",
+      "key": "B",
       "action": "Reboot the router (typed confirm)"
     },
     {

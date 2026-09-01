@@ -83,7 +83,7 @@ against the sample router, running nothing.
 
 ## Reboot and poweroff
 
-`R` reboots and `P` powers off, each behind a typed confirm: the dialog shows
+`B` reboots and `P` powers off, each behind a typed confirm: the dialog shows
 the exact `systemctl` command and runs it only after you type the action's own
 name (`reboot` / `poweroff`). A router's power is the one thing heavier than
 any card, so a plain y/n is not enough.
@@ -251,7 +251,7 @@ tui-router [flags]
 | `--version` | print the version and exit |
 
 Keys: `↑`/`↓` select a card, `enter` opens the tool that manages it, `w` opens
-the roles wizard (router profile), `B` opens the backup screen, `R`/`P`
+the roles wizard (router profile), `b` opens the backup screen, `B`/`P`
 reboot/poweroff behind a typed confirm, `r` re-reads the router now, `?` shows
 help, `q` quits.
 
@@ -278,7 +278,7 @@ captures everything a router needs to be itself again:
 | accounts | the router's own users and groups — names and roles only |
 
 `tui-router restore` reads that artifact back, previews it, and applies it
-after one explicit confirmation. The cockpit's `B` key runs both flows on
+after one explicit confirmation. The cockpit's `b` key runs both flows on
 screen, with the same previews and the same confirmations; the subcommands stay
 because a backup you can put in a cron job is worth more than one you can only
 press a key for.

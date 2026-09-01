@@ -263,10 +263,10 @@ func TestCockpitRebootKeyOpensTheTypedConfirm(t *testing.T) {
 	a.cur = &snap
 	a.rebuild()
 
-	model, _ := a.Update(keyRunes("R"))
+	model, _ := a.Update(keyRunes("B"))
 	a = model.(*app)
 	if a.power == nil {
-		t.Fatal("R should open the reboot confirm")
+		t.Fatal("B should open the reboot confirm")
 	}
 	view := a.View()
 	if !strings.Contains(view, "systemctl reboot") ||

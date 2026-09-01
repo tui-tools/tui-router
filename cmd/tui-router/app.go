@@ -281,9 +281,9 @@ func (a *app) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.launch()
 	case "w":
 		a.openWizard()
-	case "B":
+	case "b":
 		a.openBackup()
-	case "R":
+	case "B":
 		a.openPower("reboot")
 	case "P":
 		a.openPower("poweroff")
