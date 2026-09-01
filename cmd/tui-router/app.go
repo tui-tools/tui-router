@@ -52,6 +52,8 @@ type app struct {
 	wiz *wizard
 	// power is the typed reboot/poweroff confirm while it is open.
 	power *powerDialog
+	// bak is the backup screen while it is open (see backupscreen.go).
+	bak *backupScreen
 }
 
 // loadedMsg carries the result of a read.
@@ -141,6 +143,30 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if a.wiz.closed {
 				a.wiz = nil
 				// The wizard may have changed the machine — re-read it.
+				a.loading = true
+				return a, tea.Batch(cmd, a.load())
+			}
+			return a, cmd
+		}
+	}
+	// The backup screen owns its keys the same way the wizard does, and for
+	// the same reason: it is walking the operator through a mutation, and a
+	// refresh under it would change the machine it is diffing against. Its
+	// own async results still have to reach it, so they fall through to its
+	// Update rather than the cockpit's.
+	if a.bak != nil {
+		switch msg.(type) {
+		case tea.WindowSizeMsg:
+			// Falls through to the normal handling below.
+		case tickMsg:
+			return a, tick()
+		case loadedMsg:
+			return a, nil
+		default:
+			cmd := a.bak.Update(msg)
+			if a.bak.closed {
+				a.bak = nil
+				// A restore may have changed the machine — re-read it.
 				a.loading = true
 				return a, tea.Batch(cmd, a.load())
 			}
@@ -255,12 +281,24 @@ func (a *app) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.launch()
 	case "w":
 		a.openWizard()
+	case "b":
+		a.openBackup()
 	case "B":
 		a.openPower("reboot")
 	case "P":
 		a.openPower("poweroff")
 	}
 	return a, nil
+}
+
+// openBackup opens the backup screen when the backend can export and restore.
+func (a *app) openBackup() {
+	backend, ok := a.backend.(router.BackupBackend)
+	if !ok {
+		a.setStatus(ui.StatusWarn, "this backend cannot export or restore")
+		return
+	}
+	a.bak = newBackupScreen(backend)
 }
 
 // openWizard opens the roles wizard when this is a router-profile host and

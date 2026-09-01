@@ -64,6 +64,34 @@ check "check reports the roles state" \
   "sudo -n $bin --check" \
   '"profilePresent"'
 
+# --- backup and restore (read-only paths only) -----------------------------
+#
+# The export path reads every subsystem and writes one artifact; the restore
+# path is exercised with --dry-run only, which verifies and previews and
+# applies nothing. A guest is a live router, so the smoke test never runs an
+# apply — the demo round trip in the unit tests covers the write path, and the
+# real apply is what a supervised VM check exercises by hand.
+artifact="${TMPDIR:-/tmp}/tui-router-smoke.tuiback"
+rm -f "$artifact"
+
+check "export writes an artifact" \
+  "sudo -n $bin export --out $artifact" \
+  'wrote .*\.tuiback'
+
+check "the artifact verifies and previews without applying" \
+  "sudo -n $bin restore --dry-run $artifact" \
+  'integrity: checksums verified'
+
+check "the restore preview names the commands it would reload with" \
+  "sudo -n $bin restore --dry-run $artifact" \
+  'nothing was applied'
+
+check "the artifact carries no WireGuard private key" \
+  "tar -xzOf $artifact 2>/dev/null | grep -ci 'PrivateKey *=' || true" \
+  '^0$'
+
+rm -f "$artifact"
+
 # --- the report block ------------------------------------------------------
 #
 # --report is read-only and unprivileged, so it is smoked without sudo: a user

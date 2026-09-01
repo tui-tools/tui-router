@@ -14,6 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tui-tools/tui-kit/config"
@@ -94,6 +95,19 @@ func main() {
 
 // run wires the configuration, the backend and the Bubble Tea program.
 func run(args []string) error {
+	// The backup/restore subcommands are dispatched before the cockpit flags:
+	// they own their own flag sets, and export takes its timestamp from here so
+	// the pure backup package never reads a clock.
+	if len(args) > 0 {
+		switch args[0] {
+		case "export":
+			stamp := time.Now().UTC().Format("20060102-150405")
+			return runExport(args[1:], stamp, os.Stdout)
+		case "restore":
+			return runRestore(args[1:], os.Stdin, os.Stdout)
+		}
+	}
+
 	opts, err := parseFlags(args, os.Stdout)
 	if err != nil {
 		if err == flag.ErrHelp {

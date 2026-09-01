@@ -219,7 +219,7 @@ Available once tui-router's first release lands in pkgs.tui.tools.
 ### Any distribution, static binary — coming soon
 
 ```sh
-curl -fsSL https://github.com/tui-tools/tui-router/releases/download/v{version}/tui-router_{version}_linux_amd64.tar.gz | tar -xz tui-router
+curl -fsSL https://github.com/tui-tools/tui-router/releases/download/v0.2.0/tui-router_0.2.0_linux_amd64.tar.gz | tar -xz tui-router
 sudo install -m0755 tui-router /usr/local/bin/tui-router
 ```
 
@@ -251,24 +251,111 @@ tui-router [flags]
 | `--version` | print the version and exit |
 
 Keys: `↑`/`↓` select a card, `enter` opens the tool that manages it, `w` opens
-the roles wizard (router profile), `B`/`P` reboot/poweroff behind a typed
-confirm, `r` re-reads the router now, `?` shows help, `q` quits.
+the roles wizard (router profile), `b` opens the backup screen, `B`/`P`
+reboot/poweroff behind a typed confirm, `r` re-reads the router now, `?` shows
+help, `q` quits.
 
 `--check` runs the read path only — never a handoff — so it is safe against a
 live router. Its exit code reports whether the tool could read, never a verdict
 about the machine: a router with no firewall is a successful run whose findings
 travel in the JSON.
 
+## Backup and restore
+
+`tui-router export` writes one self-describing, integrity-checked artifact that
+captures everything a router needs to be itself again:
+
+| Subsystem | What travels |
+| --- | --- |
+| roles | `/etc/omarchy/router/roles.conf` — which ports play WAN and which play LAN |
+| networkd | the `.network` / `.link` units from `/etc/systemd/network` |
+| sysctl | `/etc/sysctl.d/30-omarchy-router.conf`, the forwarding knobs |
+| resolved | `/etc/systemd/resolved.conf.d/30-omarchy-router.conf` |
+| dhcp-dns | the dnsmasq config the router profile owns |
+| wireguard | each interface's config, **key material stripped** and referenced by path |
+| firewall-rules | tui-firewall's saved ruleset, when that tool manages this router |
+| nftables | the live ruleset, as the plain form `nft -f` reloads |
+| accounts | the router's own users and groups — names and roles only |
+
+`tui-router restore` reads that artifact back, previews it, and applies it
+after one explicit confirmation. The cockpit's `b` key runs both flows on
+screen, with the same previews and the same confirmations; the subcommands stay
+because a backup you can put in a cron job is worth more than one you can only
+press a key for.
+
+```
+tui-router export  [--out FILE] [--sign KEY] [--demo]
+tui-router restore FILE [--verify PUBKEY] [--dry-run] [--keep] [--demo]
+```
+
+| Flag | What it does |
+| --- | --- |
+| `export --out FILE` | write the artifact here (default `router-<host>-<stamp>.tuiback`) |
+| `export --sign KEY` | add a detached Ed25519 signature over the checksum file |
+| `restore --verify PUBKEY` | require a valid signature from this public key |
+| `restore --dry-run` | verify and preview only; apply nothing |
+| `restore --keep` | keep the restored ruleset without the connectivity confirmation |
+| `--demo` | run the whole loop against the in-memory sample router, no root |
+
+The artifact is a gzip'd tar (`.tuiback`) with a `manifest.json`, one part per
+subsystem, an always-present `MANIFEST.sha256`, and — only when you pass a key —
+a detached `SIGNATURE`. Integrity is unconditional: a single altered byte makes
+restore refuse. A signature is optional and is checked only when you pass
+`--verify`; no key is ever required, and no secret is ever written to disk or
+into the artifact. WireGuard key material is stripped from the config and
+referenced by path — you provision it out of band — and accounts carry no
+credential hashes in this stage.
+
+`restore` never applies silently. It shows a per-subsystem diff, then the exact
+reload commands it will run, then takes one typed confirmation. What runs, in
+order:
+
+1. **The config files land.** Every subsystem the artifact carries is written
+   to its fixed path — the paths are a closed set in the backend, never derived
+   from the artifact, so a crafted file cannot steer a write elsewhere.
+   `roles.conf` is re-parsed and re-rendered through the profile's own
+   validator on the way in: it is sourced by shell, so only validated interface
+   names and MACs can ever reach it.
+2. **What was written is reloaded** — `networkctl reload`, `systemctl restart
+   systemd-resolved`, `systemctl restart dnsmasq` (when dnsmasq is installed),
+   `sysctl --system`, and `wg-quick down`/`up` for each restored WireGuard
+   interface. Every one of these is previewed before the confirmation, and the
+   ones that can drop your session are marked. A file on disk that nothing
+   re-read is not a restored router.
+3. **The ruleset applies last,** as one atomic `nft -f` transaction with a
+   connectivity-safe rollback: the live ruleset is snapshotted first, and if
+   you do not confirm within 60 seconds that you still have access, it reverts
+   on its own. That is why nftables goes last — a bad ruleset is what locks an
+   operator out, and by then everything else is already in place.
+
+`--dry-run` stops after the preview.
+
+**Scripted restores.** The keep confirmation is read from stdin, so
+`printf 'yes\nkeep\n' | tui-router restore FILE` works. A restore nobody is
+sitting in front of can skip the 60-second window with `--keep`, which keeps
+the ruleset the moment it applies. It is for scripted restores or a local
+console: it bypasses the connectivity guard, so only use it when you can reach
+the box another way. Without it the default is unchanged — silence rolls back.
+
+**Restoring onto different hardware.** If the artifact's `roles.conf` assigns
+roles to ports this machine does not have — a new box whose NICs are named
+`enp1s0` where the old one had `eth0` — the restore says so, names the ports
+that are missing and the ones this machine actually has, and requires a second
+confirmation typed as `different hardware` before the ordinary one. Restoring
+as-is is legal and sometimes right; it must not be an accident. Pinning roles
+by MAC in the roles wizard (`m`) is what makes an assignment survive a rename
+in the first place.
+
 ## The contract
 
 The cards are read-only: every per-area change belongs to the tool a card
 hands off to, through that tool's preview-and-confirm. The cockpit itself
-carries exactly three mutations — the roles wizard, reboot and poweroff — and
-each one shows the literal command line before a confirm, with the wizard's
-apply additionally staging its own timed revert first. The one place this
-binary starts a process is its backend package — the read-only probes, the
-handoff exec, and these previewed commands — which is what the family's exec
-boundary requires.
+carries exactly four mutations — the roles wizard, reboot, poweroff and
+`restore` — and each one shows the literal command line or the file diff before
+a confirm, with the wizard's apply and the restore's nftables step additionally
+staging their own timed revert first. The one place this binary starts a
+process is its backend package — the read-only probes, the handoff exec, and
+these previewed commands — which is what the family's exec boundary requires.
 
 The handoff is Bubble Tea's `tea.Exec`: the cockpit suspends, the child tool
 takes over the terminal, and the cockpit resumes and re-reads the machine when

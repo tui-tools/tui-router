@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/tui-tools/tui-router/internal/backup"
 )
 
 // Fake is the in-memory backend behind --demo and the tests: a plausible
@@ -20,12 +22,72 @@ type Fake struct {
 	// roles is the demo's role-assignment state, driven by the roles wizard
 	// (see roles_fake.go).
 	roles *fakeRoles
+
+	// The fields below are the demo's in-memory "disk": the state export reads
+	// and restore writes, so the whole backup loop runs with no root and no
+	// real router. rawWG deliberately holds key material, exactly as a real
+	// /etc/wireguard/*.conf would, so the collector's stripping is exercised
+	// and the no-secrets test has something real to assert never leaked.
+	nft      string
+	networkd map[string]string
+	dhcpDNS  string
+	rawWG    map[string]string
+	accounts []Account
+	// sysctl and resolved are the two supporting drop-ins a restore must carry
+	// for a router to forward and resolve the way it did before; firewallNFT
+	// is tui-firewall's saved ruleset, kept apart from the live nft dump. The
+	// role assignment lives in f.roles, so the demo has one roles.conf that
+	// both the wizard and the backup loop work on.
+	sysctl      string
+	resolved    string
+	firewallNFT string
+	// reloads records the previews of the reload commands a restore ran, so a
+	// test can assert the demo previews and "runs" the same sequence the real
+	// backend would.
+	reloads []string
 }
 
-// NewFake returns the sample router.
+// Account mirrors backup.Account for the demo backend, so the demo's seed
+// reads without reaching into the backup package at every use site.
+type Account = backup.Account
+
+// DemoWireguardSecret is the fake key material the demo's WireGuard config
+// carries. It is documentation-only, and the no-secrets test asserts these
+// bytes never reach an assembled artifact.
+const DemoWireguardSecret = "DEMOprivateKEYshouldNEVERleak0000000000000ab="
+
+// NewFake returns the sample router, seeded with a plausible logical state so
+// `--demo export` and `--demo restore` both have something real to work on.
 func NewFake() *Fake {
+	return &Fake{
+		started:   time.Now(),
+		installed: map[string]bool{},
+		roles:     &fakeRoles{content: demoRolesConf},
+		nft:       demoNftRuleset,
+		networkd: map[string]string{
+			"10-wan0.network": demoWanNetwork,
+			"20-lan0.network": demoLanNetwork,
+		},
+		dhcpDNS: demoDnsmasqConf,
+		rawWG: map[string]string{
+			"wg0": demoWireguardConf,
+		},
+		accounts: []Account{
+			{Name: "netadmin", Role: "admin"},
+			{Name: "monitor", Role: "readonly"},
+		},
+		sysctl:      demoSysctlConf,
+		resolved:    demoResolvedConf,
+		firewallNFT: demoFirewallRules,
+	}
+}
+
+// NewEmptyFake returns a demo backend with no logical state, the clean machine
+// a restore writes into during the round-trip test. Its roles state exists but
+// is empty, so a restore has to put the role assignment back too.
+func NewEmptyFake() *Fake {
 	return &Fake{started: time.Now(), installed: map[string]bool{},
-		roles: &fakeRoles{content: demoRolesConf}}
+		roles: &fakeRoles{content: ""}}
 }
 
 // demoInterfaces is the sample router's NIC list, shared by the snapshot and

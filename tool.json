@@ -3,7 +3,7 @@
   "name": "tui-router",
   "binary": "tui-router",
   "tagline": "Every part of the router on one screen",
-  "description": "The read-only cockpit for a Linux router. One screen, one card per area — interfaces and their WAN/LAN roles, the firewall's posture, live traffic per interface, the DHCP server and its leases, the WireGuard peers — read from cheap system probes and refreshed in place.\n\nIt changes nothing itself. Press ENTER on a card and tui-router suspends, hands the terminal to the tool that manages that area — tui-firewall, tui-network, tui-traffic, tui-vpn — and resumes when you leave it, the same handoff the family launcher uses. The overview is here; the change happens in the tool the card opens, behind that tool's own preview and confirm.",
+  "description": "The read-only cockpit for a Linux router. One screen, one card per area — interfaces and their WAN/LAN roles, the firewall's posture, live traffic per interface, the DHCP server and its leases, the WireGuard peers — read from cheap system probes and refreshed in place.\n\nIt changes nothing itself. Press ENTER on a card and tui-router suspends, hands the terminal to the tool that manages that area — tui-firewall, tui-network, tui-traffic, tui-vpn — and resumes when you leave it, the same handoff the family launcher uses. The overview is here; the change happens in the tool the card opens, behind that tool's own preview and confirm.\n\nIt also carries what no per-area tool can: `tui-router export` writes one integrity-checked .tuiback artifact with the router's identity — the WAN/LAN roles, the networkd units, the forwarding and resolver drop-ins, DHCP/DNS, the WireGuard configs with their keys stripped, the saved firewall ruleset and the account names. `tui-router restore` puts it back behind a diff, a preview of every reload command, a typed confirmation and an atomic apply that rolls back unless you confirm you still have access (`--keep` skips that window for scripted restores).",
   "category": "network",
   "homepage": "https://github.com/tui-tools/tui-router",
   "repo": "https://github.com/tui-tools/tui-router",
@@ -40,6 +40,10 @@
     {
       "key": "w",
       "action": "Roles wizard: assign the WAN/LAN roles (router profile)"
+    },
+    {
+      "key": "b",
+      "action": "Backup: export an artifact, or restore one (typed confirm)"
     },
     {
       "key": "B",
@@ -167,7 +171,7 @@
     }
   },
   "security": {
-    "needs_sudo": "The cockpit only reads. Most reads are unprivileged; the ones that need root (the nftables ruleset, `ufw status`, the WireGuard dump) escalate with `sudo -n`, which never prompts, and a card that cannot escalate reads unknown. Nothing here changes the machine.",
+    "needs_sudo": "The cards only read; the reads that need root (the nftables ruleset, `ufw status`, the WireGuard dump) escalate with `sudo -n`, which never prompts. The four mutations — roles wizard, reboot, poweroff, `restore` — escalate the same way, each behind its literal command and a confirmation.",
     "preview_before_run": true,
     "no_daemon": true,
     "no_network": true,
