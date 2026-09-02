@@ -366,6 +366,24 @@ type ApplyPlan struct {
 	ManualRevert []string
 }
 
+// AppliedSummary is the wizard's own sentence for a successful apply, and the
+// only thing the result screen states as the verdict.
+//
+// The command's output is NOT that sentence. `omarchy-router-nics --apply`
+// runs install(1) and networkctl underneath, and those write to stderr for
+// reasons that have nothing to do with the outcome — libselinux prints
+// "Regex version mismatch" on a machine whose libsepol and policy disagree —
+// so a screen that showed the command's first line as the success summary
+// reported a library warning in green as if it were the result. The output
+// belongs under ApplyOutputHeading, as detail.
+const AppliedSummary = "The role assignment is applied: the profile rewrote the " +
+	".network units and reloaded systemd-networkd."
+
+// ApplyOutputHeading labels the apply command's combined output on the result
+// screen, so a reader knows the lines under it are the command talking, not
+// the tool's verdict.
+const ApplyOutputHeading = "omarchy-router-nics --apply printed:"
+
 // ApplyResult is what the apply step reports back to the wizard.
 type ApplyResult struct {
 	// Output is the apply command's output.

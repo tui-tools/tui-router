@@ -1,0 +1,13 @@
+● 3: lan0
+                   Link File: /usr/lib/systemd/network/99-default.link
+                Network File: /etc/systemd/network/20-lan0.network
+                       State: routable (configured)
+                 Online state: online
+                        Type: ether
+                       State: routable (configured)
+                     Address: 192.0.2.1
+                  Gateway: 192.0.2.254
+         Offered DHCP leases: 192.0.2.101 (to 00:00:5e:00:53:21)
+                              192.0.2.102 (to 00:00:5e:00:53:22)
+                              192.0.2.150 (to 00:00:5e:00:53:23)
+           Activation Policy: up

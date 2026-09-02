@@ -40,12 +40,22 @@ Name=wan0
 DHCP=yes
 `
 
+	// The demo LAN unit hands out the leases itself, the way an Omarchy
+	// Router's does: DHCPServer=yes in [Network], the pool carved out of the
+	// unit's own Address= by the [DHCPServer] offsets.
 	demoLanNetwork = `[Match]
 Name=lan0
 
 [Network]
 Address=192.0.2.1/24
 IPForward=yes
+DHCPServer=yes
+
+[DHCPServer]
+PoolOffset=100
+PoolSize=101
+EmitDNS=yes
+DNS=192.0.2.1
 `
 
 	demoDnsmasqConf = `interface=lan0

@@ -1,6 +1,7 @@
 package router
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,9 +10,10 @@ import (
 
 // The family rule: every package turning bytes it did not write into values
 // the tool acts on carries a Go native fuzz test, seeded from its testdata —
-// see tui-kit/templates/FUZZING.md. The cockpit has five such parsers (ip -j
-// interfaces and routes, /proc/net/dev, the wg dump, the lease count, and the
-// three firewall postures), and one target below covers each. Every target
+// see tui-kit/templates/FUZZING.md. The cockpit has one for each parser that
+// reads bytes another program wrote (ip -j interfaces and routes,
+// /proc/net/dev, the wg dump, the dnsmasq lease count, the three firewall
+// postures, and systemd-networkd's units and lease table). Every target
 // asserts an invariant a caller may assume for any input at all, not an output
 // for a known one: not panicking is the floor, not the goal.
 
@@ -161,6 +163,49 @@ func FuzzParseUfwStatus(f *testing.F) {
 		}
 		if p.Summary == "" {
 			t.Fatal("posture has no summary")
+		}
+	})
+}
+
+// FuzzParseNetworkdUnit covers the third DHCP server's configuration: a
+// .network unit and its drop-ins, folded into one reading. The invariant is
+// the one every parser here carries — nothing comes out that was not in the
+// text — plus the pool arithmetic never producing a range it cannot parse
+// back.
+func FuzzParseNetworkdUnit(f *testing.F) {
+	seed(f, "networkd-lan.network", "networkd-lan-dropin.conf",
+		"networkd-container.network")
+	f.Fuzz(func(t *testing.T, text string) {
+		unit := ParseNetworkdUnit([]NetworkdFile{{Path: "unit.network", Raw: text}})
+		substring(t, text, unit.Link, "networkd link")
+		substring(t, text, unit.Address, "networkd address")
+		if unit.PoolOffset < 0 || unit.PoolSize < 0 {
+			t.Fatalf("negative pool keys: %d/%d", unit.PoolOffset, unit.PoolSize)
+		}
+		start, end, ok := unit.Pool()
+		if !ok {
+			return
+		}
+		if !unit.HasSubnet() {
+			t.Fatalf("a pool %s-%s from a unit with no subnet", start, end)
+		}
+		if net.ParseIP(start) == nil || net.ParseIP(end) == nil {
+			t.Fatalf("pool %s-%s is not a pair of addresses", start, end)
+		}
+	})
+}
+
+// FuzzCountNetworkctlLeases covers the lease read: another program's table,
+// counted without ever exceeding the number of lines it could have held.
+func FuzzCountNetworkctlLeases(f *testing.F) {
+	seed(f, "networkctl-status.txt", "networkctl-status-noleases.txt")
+	f.Fuzz(func(t *testing.T, text string) {
+		n := CountNetworkctlLeases(text)
+		if n < 0 {
+			t.Fatalf("negative lease count %d", n)
+		}
+		if got := strings.Count(text, "\n") + 1; n > got {
+			t.Fatalf("counted %d leases from at most %d lines", n, got)
 		}
 	})
 }

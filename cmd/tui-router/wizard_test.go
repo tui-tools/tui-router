@@ -295,3 +295,39 @@ func TestUpdatesCardIsWiredToTuiUpdate(t *testing.T) {
 		t.Error("the cockpit must carry an updates card")
 	}
 }
+
+// TestWizardDoneStatesItsOwnVerdict is the fix for a result screen that read
+// the apply command's first line as the outcome. `omarchy-router-nics --apply`
+// runs install(1) underneath, and on a machine whose libsepol and policy
+// disagree libselinux writes "Regex version mismatch" to stderr; the runner
+// folds stderr into the output, so that warning was what the operator saw
+// after a successful apply. The tool's own sentence is the verdict now, and
+// the command's output is detail under a heading that names its source.
+func TestWizardDoneStatesItsOwnVerdict(t *testing.T) {
+	_, w := demoWizard(t)
+	w.step = wizDone
+	w.result = router.ApplyResult{
+		Output:          "libselinux: Regex version mismatch, expected: 10.45 actual: 10.42",
+		RevertScheduled: true,
+	}
+
+	view := w.View(theme.New(), 120, 50)
+	for _, want := range []string{
+		"Applied",
+		router.AppliedSummary,
+		router.ApplyOutputHeading,
+		"Regex version mismatch",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("done screen lacks %q:\n%s", want, view)
+		}
+	}
+	// The command's line must come after the tool's own sentence and after the
+	// heading that says whose line it is — never in their place.
+	summary := strings.Index(view, router.AppliedSummary)
+	heading := strings.Index(view, router.ApplyOutputHeading)
+	stderr := strings.Index(view, "Regex version mismatch")
+	if summary >= heading || heading >= stderr {
+		t.Errorf("the command's output must follow the verdict and its heading:\n%s", view)
+	}
+}

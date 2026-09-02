@@ -3,6 +3,8 @@ package router
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -21,6 +23,9 @@ type Real struct {
 	ufw       *runner.Runner
 	firewalld *runner.Runner
 	systemctl *runner.Runner
+	// networkctl reads systemd-networkd's own DHCP server: `networkctl status
+	// <link>` is where the offered leases are published.
+	networkctl *runner.Runner
 	// tee, useradd and groupadd are the write side, used only by restore. The
 	// reads above never touch them; every mutation the tool makes goes through
 	// one of these, so the exec boundary stays a single package.
@@ -29,6 +34,9 @@ type Real struct {
 	groupadd   *runner.Runner
 	procNetDev string
 	leasePaths []string
+	// networkdDirs are the .network search directories, a field so a test can
+	// point the discovery at its own fixtures.
+	networkdDirs []string
 }
 
 // unprivileged and privileged are the address-of values the runner options
@@ -53,7 +61,8 @@ var dnsmasqLeasePaths = []string{
 // prompt. A backend a machine does not have is simply nil, and its card reads
 // "not detected" rather than failing the whole cockpit.
 func New(sudoPrefix []string) (*Real, error) {
-	r := &Real{procNetDev: procNetDevPath, leasePaths: dnsmasqLeasePaths}
+	r := &Real{procNetDev: procNetDevPath, leasePaths: dnsmasqLeasePaths,
+		networkdDirs: NetworkdConfigDirs}
 
 	r.ip, _ = runner.New(runner.Options{
 		Bin: "ip", SearchPaths: []string{"/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip"},
@@ -62,6 +71,10 @@ func New(sudoPrefix []string) (*Real, error) {
 	})
 	r.systemctl, _ = runner.New(runner.Options{
 		Bin: "systemctl", SearchPaths: []string{"/usr/bin/systemctl", "/bin/systemctl"},
+		SudoPrefix: sudoPrefix, PrivilegedReads: &unprivileged,
+	})
+	r.networkctl, _ = runner.New(runner.Options{
+		Bin: "networkctl", SearchPaths: []string{"/usr/bin/networkctl", "/bin/networkctl"},
 		SudoPrefix: sudoPrefix, PrivilegedReads: &unprivileged,
 	})
 	r.firewalld, _ = runner.New(runner.Options{
@@ -181,17 +194,39 @@ func (r *Real) readFirewall(ctx context.Context) FirewallPosture {
 }
 
 // readDHCP detects a DHCP server and counts its leases.
+//
+// systemd-networkd is looked at first, and only when a .network unit actually
+// turns a server on over a real subnet. That is positive evidence — a file
+// that says DHCPServer=yes on 192.0.2.1/24 is a server for that LAN —
+// whereas dnsmasq and Kea are detected by their binary being installed, which
+// a router profile may carry for DNS alone. A machine with both therefore
+// reports the one that is serving, and an Omarchy Router, which has no DHCP
+// package at all, stops reporting "no DHCP server detected".
 func (r *Real) readDHCP(ctx context.Context) DHCP {
-	server, unit := r.detectDHCP()
-	if server == "" {
-		return DHCP{Leases: -1}
+	units := r.networkdDHCPUnits()
+	for _, unit := range units {
+		if unit.Enabled {
+			return r.readNetworkdDHCP(ctx, unit)
+		}
 	}
+	if server, unit := detectPackagedDHCP(); server != "" {
+		return r.readPackagedDHCP(ctx, server, unit)
+	}
+	// No package, and no unit that turns the server on: a unit that carries a
+	// [DHCPServer] section with the switch off is still worth reporting, as a
+	// server configured and stopped rather than nothing at all.
+	if len(units) > 0 {
+		return r.readNetworkdDHCP(ctx, units[0])
+	}
+	return DHCP{Leases: -1}
+}
+
+// readPackagedDHCP reads the state of dnsmasq or Kea: the unit's activity, and
+// for dnsmasq the leases its own lease file lists.
+func (r *Real) readPackagedDHCP(ctx context.Context, server, unit string) DHCP {
 	d := DHCP{Server: server, Leases: -1}
-	if r.systemctl != nil && r.systemctl.Bin != "" {
-		state, _ := r.systemctl.Read(ctx, "systemctl", "is-active", unit)
-		d.Active = strings.TrimSpace(state) == "active"
-	}
-	if server == "dnsmasq" {
+	d.Active = r.unitActive(ctx, unit)
+	if server == ServerDnsmasq {
 		for _, path := range r.leasePaths {
 			if data, err := os.ReadFile(path); err == nil { //nolint:gosec // path is one of a fixed set of lease-file locations, never user input
 				d.Leases = CountDnsmasqLeases(string(data))
@@ -202,15 +237,120 @@ func (r *Real) readDHCP(ctx context.Context) DHCP {
 	return d
 }
 
-// detectDHCP reports which DHCP server is installed and its unit name.
-func (r *Real) detectDHCP() (server, unit string) {
+// readNetworkdDHCP describes the server one .network unit declares: the link
+// it serves, the pool its Address= and PoolOffset=/PoolSize= work out to, and
+// the leases networkctl says it has offered.
+func (r *Real) readNetworkdDHCP(ctx context.Context, unit NetworkdUnit) DHCP {
+	d := DHCP{Server: ServerNetworkd, Leases: -1, Link: unit.Link}
+	d.Units = append([]string{unit.Path}, unit.Dropins...)
+	if start, end, ok := unit.Pool(); ok {
+		d.PoolStart, d.PoolEnd = start, end
+	}
+	d.Active = unit.Enabled && r.unitActive(ctx, NetworkdUnitName)
+	if !d.Active || unit.Link == "" || r.networkctl == nil || r.networkctl.Bin == "" {
+		return d
+	}
+	out, err := r.networkctl.Read(ctx, "networkctl", "status", "--no-pager", unit.Link)
+	if err != nil {
+		return d
+	}
+	d.Leases = CountNetworkctlLeases(out)
+	return d
+}
+
+// unitActive asks systemd whether one unit is running. A machine without
+// systemctl simply reports the server as not running rather than failing the
+// whole read.
+func (r *Real) unitActive(ctx context.Context, unit string) bool {
+	if r.systemctl == nil || r.systemctl.Bin == "" {
+		return false
+	}
+	state, _ := r.systemctl.Read(ctx, "systemctl", "is-active", unit)
+	return strings.TrimSpace(state) == "active"
+}
+
+// detectPackagedDHCP reports which DHCP package is installed and its unit
+// name.
+func detectPackagedDHCP() (server, unit string) {
 	if runner.Available("dnsmasq", "/usr/sbin/dnsmasq", "/usr/bin/dnsmasq") {
-		return "dnsmasq", "dnsmasq.service"
+		return ServerDnsmasq, "dnsmasq.service"
 	}
 	if runner.Available("kea-dhcp4", "/usr/sbin/kea-dhcp4", "/usr/bin/kea-dhcp4") {
-		return "kea", "kea-dhcp4-server.service"
+		return ServerKea, "kea-dhcp4-server.service"
 	}
 	return "", ""
+}
+
+// networkdDHCPUnits reads every .network unit on the machine that declares a
+// DHCP server on a subnet of its own, with its drop-ins folded in, in the
+// order systemd-networkd reads them: a unit name an earlier search directory
+// claims wins, and the drop-ins of that name are applied from every directory,
+// /usr/lib first and /etc last — so 50-tui-network-dhcp.conf, which tui-network
+// writes under /etc, has the last word on the pool.
+//
+// A unit a plain read cannot open (netplan renders its files into /run as mode
+// 0640) is skipped: the cockpit never escalates for a read it can live
+// without.
+func (r *Real) networkdDHCPUnits() []NetworkdUnit {
+	var units []NetworkdUnit
+	seen := map[string]bool{}
+	for _, dir := range r.networkdDirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if entry.IsDir() || !strings.HasSuffix(name, networkSuffix) || seen[name] {
+				continue
+			}
+			seen[name] = true
+			path := filepath.Join(dir, name)
+			raw, err := os.ReadFile(path) //nolint:gosec // the path comes from systemd's own search directories
+			if err != nil {
+				continue
+			}
+			files := append([]NetworkdFile{{Path: path, Raw: string(raw)}},
+				networkdDropinFiles(r.networkdDirs, name)...)
+			unit := ParseNetworkdUnit(files)
+			if (unit.HasSection || unit.Enabled) && unit.HasSubnet() {
+				units = append(units, unit)
+			}
+		}
+	}
+	// Path order, so the unit the card describes is the same on every read.
+	sort.Slice(units, func(i, j int) bool { return units[i].Path < units[j].Path })
+	return units
+}
+
+// networkdDropinFiles reads the drop-ins of one unit name, in networkd's own
+// order: the search directories from the most general to the most specific,
+// and inside each one the files sorted by name.
+func networkdDropinFiles(dirs []string, unitName string) []NetworkdFile {
+	var files []NetworkdFile
+	for i := len(dirs) - 1; i >= 0; i-- {
+		dir := filepath.Join(dirs[i], unitName+".d")
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), dropinSuffix) {
+				names = append(names, entry.Name())
+			}
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			path := filepath.Join(dir, name)
+			raw, err := os.ReadFile(path) //nolint:gosec // the path comes from systemd's own search directories
+			if err != nil {
+				continue
+			}
+			files = append(files, NetworkdFile{Path: path, Raw: string(raw)})
+		}
+	}
+	return files
 }
 
 // readVPN reads the WireGuard state and whether headscale is present.

@@ -10,7 +10,8 @@ import (
 
 // Fake is the in-memory backend behind --demo and the tests: a plausible
 // office router with two interfaces, an active firewall, live traffic, a
-// dnsmasq handing out leases and a WireGuard interface with peers. It builds
+// systemd-networkd DHCP server handing out leases on the LAN and a WireGuard
+// interface with peers. It builds
 // every card so the whole cockpit renders on a machine that has none of these
 // backends installed — and it reports every managing tool as absent, so ENTER
 // says so rather than trying to launch anything.
@@ -137,7 +138,14 @@ func (f *Fake) Read(_ context.Context) (Snapshot, error) {
 			{Name: "eth1", RxBytes: 267_286_000 + uint64(elapsed*180_000), TxBytes: 893_947_000 + uint64(elapsed*640_000)},
 			{Name: "wg0", RxBytes: 27_762_000 + uint64(elapsed*24_000), TxBytes: 57_196_000 + uint64(elapsed*36_000)},
 		},
-		DHCP:    DHCP{Server: "dnsmasq", Active: true, Leases: 12},
+		// The demo router serves its LAN from systemd-networkd's own DHCP
+		// server, which is what the router profile produces: the pool below
+		// is exactly what demoLanNetwork's [DHCPServer] works out to.
+		DHCP: DHCP{
+			Server: ServerNetworkd, Active: true, Leases: 12, Link: "lan0",
+			PoolStart: "192.0.2.100", PoolEnd: "192.0.2.200",
+			Units: []string{"/etc/systemd/network/20-lan0.network"},
+		},
 		Updates: Updates{Available: true, Pending: 4, Security: 1},
 		Roles:   f.readRoles(),
 		VPN: VPN{

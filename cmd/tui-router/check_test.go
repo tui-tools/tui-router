@@ -53,4 +53,20 @@ func TestRunCheckDemo(t *testing.T) {
 	if len(report.Snapshot.Interfaces) == 0 {
 		t.Error("check should carry the snapshot's interfaces")
 	}
+	// --check reports the same DHCP reading the screen shows, systemd-networkd
+	// included: the link it serves, the pool it hands out and the lease count.
+	dhcp := report.Snapshot.DHCP
+	if dhcp.Server != router.ServerNetworkd || dhcp.Link != "lan0" ||
+		dhcp.PoolStart != "192.0.2.100" || dhcp.PoolEnd != "192.0.2.200" {
+		t.Errorf("check's DHCP snapshot = %+v", dhcp)
+	}
+	for _, card := range report.Cards {
+		if card.Kind != string(router.CardDHCP) {
+			continue
+		}
+		want := "systemd-networkd · lan0 · pool 192.0.2.100-192.0.2.200 · 12 leases"
+		if card.Summary != want {
+			t.Errorf("check's DHCP card = %q, want %q", card.Summary, want)
+		}
+	}
 }

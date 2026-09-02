@@ -31,7 +31,7 @@ card opens, behind that tool's own preview and confirm.
 | Interfaces | each link, up/down, its IPv4, and whether it looks like WAN (a default route) or LAN (an attached subnet) — from `ip -j addr` and `ip -j route` | tui-network |
 | Firewall | which backend is active (firewalld, nftables or ufw) and a one-line posture: default policy, rule count, whether NAT masquerades | tui-firewall |
 | Traffic | the live throughput per interface, a small `/proc/net/dev` delta refreshed on a timer | tui-traffic |
-| DHCP | whether a DHCP server (dnsmasq or kea) is running, and how many leases it holds | tui-network |
+| DHCP | which DHCP server is serving the LAN and what it hands out: dnsmasq or Kea by their package, or systemd-networkd's own server — the `.network` unit (and its drop-ins) that carries `[DHCPServer]`, the link it matches, the pool its `Address=` and `PoolOffset=`/`PoolSize=` work out to, and the leases `networkctl status <link>` lists | tui-network |
 | VPN | any WireGuard interface and its peer count (from `wg show`), and whether a headscale control plane is present | tui-vpn |
 | Updates | the pending and security update counts, read from `tui-update --check` (cached, re-read every few minutes); "tui-update not installed" when the binary is absent | tui-update |
 
@@ -95,11 +95,11 @@ tui-router --demo
 ```
 
 `--demo` drives a sample office router — two interfaces, an active firewall,
-live traffic, a dnsmasq handing out leases, a WireGuard interface with peers,
-a pending-updates count, and an unassigned roles.conf so the roles wizard can
-be walked end to end — every card renders and every flow works on a machine
-that has none of these backends installed. Nothing is read and nothing is
-changed.
+live traffic, a systemd-networkd DHCP server handing out leases on the LAN, a
+WireGuard interface with peers, a pending-updates count, and an unassigned
+roles.conf so the roles wizard can be walked end to end — every card renders
+and every flow works on a machine that has none of these backends installed.
+Nothing is read and nothing is changed.
 
 ## Install
 
@@ -219,7 +219,7 @@ Available once tui-router's first release lands in pkgs.tui.tools.
 ### Any distribution, static binary — coming soon
 
 ```sh
-curl -fsSL https://github.com/tui-tools/tui-router/releases/download/v0.3.0/tui-router_0.3.0_linux_amd64.tar.gz | tar -xz tui-router
+curl -fsSL https://github.com/tui-tools/tui-router/releases/download/v0.3.1/tui-router_0.3.1_linux_amd64.tar.gz | tar -xz tui-router
 sudo install -m0755 tui-router /usr/local/bin/tui-router
 ```
 

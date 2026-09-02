@@ -1,0 +1,6 @@
+● 2: wan0
+                Network File: /etc/systemd/network/10-wan0.network
+                       State: routable (configured)
+                        Type: ether
+                     Address: 198.51.100.20
+           Activation Policy: up

@@ -115,7 +115,9 @@ func (f *Fake) ApplyRoles(_ context.Context, _ string) (ApplyResult, error) {
 	f.roles.applied = true
 	f.roles.revertScheduled = true
 	return ApplyResult{
-		Output:          "Applied. (demo: nothing was run)",
+		// The demo's output is the command talking, not the verdict: the
+		// wizard states the outcome itself and shows this under a heading.
+		Output:          "(demo: omarchy-router-nics was not run)",
 		RevertScheduled: true,
 	}, nil
 }

@@ -80,8 +80,9 @@ func TestDemoRendersWithNothingInstalled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("demo read: %v", err)
 	}
-	// The demo router has a WAN and a LAN, an active firewall, a dnsmasq with
-	// leases and a WireGuard interface with peers, so every card has content.
+	// The demo router has a WAN and a LAN, an active firewall, a
+	// systemd-networkd DHCP server with leases on the LAN and a WireGuard
+	// interface with peers, so every card has content.
 	cards := Cards(snap, nil, func(string) bool { return false })
 	byKind := map[CardKind]Card{}
 	for _, card := range cards {
@@ -92,6 +93,13 @@ func TestDemoRendersWithNothingInstalled(t *testing.T) {
 	}
 	if byKind[CardVPN].Status != StatusOK {
 		t.Errorf("demo VPN card = %+v, want ok", byKind[CardVPN])
+	}
+	// The demo's DHCP card is the networkd one: the demo exists so a machine
+	// with no DHCP package at all still shows what an Omarchy Router looks
+	// like, which is the case the card used to call "no DHCP server".
+	want := "systemd-networkd · lan0 · pool 192.0.2.100-192.0.2.200 · 12 leases"
+	if got := byKind[CardDHCP].Summary; got != want {
+		t.Errorf("demo DHCP summary = %q, want %q", got, want)
 	}
 	for _, card := range cards {
 		if card.ToolInstalled {
