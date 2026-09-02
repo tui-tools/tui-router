@@ -68,7 +68,7 @@ a banner and `w` opens the roles wizard:
    restored and re-applied automatically. Then `omarchy-router-nics --apply`
    rewrites the `.network` units and reloads networkd.
 4. **Confirm connectivity.** If the session held, one more previewed command
-   (`systemctl stop tui-router-roles-revert.timer …`) disarms the revert and
+   (`systemctl stop tui-router-roles-revert.service …`) disarms the revert and
    the new mapping is permanent. If it did not, wait two minutes and the
    router comes back on the old assignment.
 

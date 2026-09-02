@@ -239,8 +239,15 @@ func (r *Real) CancelRevert(ctx context.Context) error {
 			return err
 		}
 	}
-	_, err := systemctl.Run(ctx, runner.Command{Argv: CancelRevertArgv()})
-	return err
+	if _, err := systemctl.Run(ctx, runner.Command{Argv: CancelRevertArgv()}); err != nil {
+		// A stop that failed only because the transient units were already
+		// collected left the machine exactly where the cancel wanted it.
+		if CancelRevertFailureIsHarmless(err.Error()) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // rebootCommand and poweroffCommand are the cockpit's two power commands.

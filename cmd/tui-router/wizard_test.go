@@ -155,7 +155,7 @@ func TestWizardWalksTheWholeFlowOnTheDemo(t *testing.T) {
 	// c opens the cancel confirm, which previews the systemctl stop.
 	step(t, w, keyRunes("c"))
 	view = w.View(th, 120, 50)
-	if !strings.Contains(view, "systemctl stop tui-router-roles-revert.timer") {
+	if !strings.Contains(view, "systemctl stop tui-router-roles-revert.service tui-router-roles-revert.timer") {
 		t.Errorf("cancel confirm should preview the stop command:\n%s", view)
 	}
 	step(t, w, keyRunes("y"))

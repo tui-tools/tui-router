@@ -28,7 +28,7 @@ const (
 	// scheduled revert can restore it.
 	RolesPrevPath = RolesConfPath + ".prev"
 	// RevertUnit is the transient systemd unit the anti-lockout revert runs
-	// as; cancelling the revert stops this unit's timer.
+	// as; cancelling the revert stops this unit's service and timer.
 	RevertUnit = "tui-router-roles-revert"
 	// RevertDelay is how long the operator has to confirm connectivity after
 	// an apply before the revert restores the previous assignment.
@@ -227,10 +227,48 @@ func RevertScheduleArgv(delay time.Duration) []string {
 }
 
 // CancelRevertArgv builds the command that disarms the revert once the
-// operator has confirmed connectivity: stop both the timer and the service,
+// operator has confirmed connectivity: stop both the service and the timer,
 // so the revert neither fires later nor keeps running now.
+//
+// The service comes FIRST on purpose. `systemd-run --on-active` creates a
+// transient pair, and systemd garbage-collects a transient unit as soon as
+// nothing references it any more: stopping the timer first can take the
+// service with it, so the same invocation then reaches an argument whose unit
+// is already gone and systemctl exits 5 with "Unit ... not loaded" — a
+// failure message for a revert that was in fact disarmed. Stopping the
+// service first leaves the timer, which is still referenced, to be stopped
+// normally. CancelRevertFailureIsHarmless covers whatever the race still
+// wins.
 func CancelRevertArgv() []string {
-	return []string{"systemctl", "stop", RevertUnit + ".timer", RevertUnit + ".service"}
+	return []string{"systemctl", "stop", RevertUnit + ".service", RevertUnit + ".timer"}
+}
+
+// disarmedMarkers are the systemctl phrasings that mean the unit a stop
+// targeted no longer exists. `systemctl stop` on a unit systemd has already
+// collected exits 5 and says "not loaded"; a unit file that was never there
+// is reported "not found" (LoadState not-found).
+var disarmedMarkers = []string{"not loaded", "not found", "not-found"}
+
+// CancelRevertFailureIsHarmless reports whether a failed cancel only failed
+// because the revert units had already gone away — which is the state the
+// cancel was asking for. It makes the cancel idempotent: pressing the keep
+// gesture twice, or pressing it while systemd is collecting the transient
+// pair, reports success both times instead of a red status line for a machine
+// that is already in the wanted state.
+//
+// The message must name the revert unit, so an unrelated failure (a missing
+// systemctl, a denied escalation) is never swallowed.
+func CancelRevertFailureIsHarmless(message string) bool {
+	lower := strings.ToLower(message)
+	if !strings.Contains(lower, RevertUnit) {
+		return false
+	}
+	for _, marker := range disarmedMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // ManualRevertInstructions is what the wizard prints when systemd-run is not

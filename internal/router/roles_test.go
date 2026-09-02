@@ -2,10 +2,15 @@ package router
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tui-tools/tui-kit/runner"
 )
 
 // The backends must offer the wizard and the power keys the same surface, so
@@ -191,11 +196,67 @@ func TestRevertScheduleDelayRendering(t *testing.T) {
 	}
 }
 
+// The service must be stopped BEFORE the timer: stopping the transient timer
+// first lets systemd collect the transient service, and the same invocation
+// then fails on a unit that is already gone.
 func TestCancelRevertArgv(t *testing.T) {
 	want := []string{"systemctl", "stop",
-		"tui-router-roles-revert.timer", "tui-router-roles-revert.service"}
+		"tui-router-roles-revert.service", "tui-router-roles-revert.timer"}
 	if got := CancelRevertArgv(); !reflect.DeepEqual(got, want) {
 		t.Errorf("CancelRevertArgv() = %q, want %q", got, want)
+	}
+}
+
+func TestCancelRevertFailureIsHarmless(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		message string
+		want    bool
+	}{
+		{
+			// The exit-5 race the keep gesture hit on camera.
+			name: "service collected with the timer",
+			message: "`/usr/bin/sudo -n systemctl stop tui-router-roles-revert.service " +
+				"tui-router-roles-revert.timer` failed: Failed to stop " +
+				"tui-router-roles-revert.service: Unit tui-router-roles-revert.service not loaded.",
+			want: true,
+		},
+		{
+			name: "both units already gone",
+			message: "`systemctl stop tui-router-roles-revert.service` failed: " +
+				"Unit tui-router-roles-revert.timer not found.",
+			want: true,
+		},
+		{
+			name: "load state not-found",
+			message: "`systemctl stop tui-router-roles-revert.service` failed: " +
+				"Unit tui-router-roles-revert.service could not be found (not-found).",
+			want: true,
+		},
+		{
+			name: "a real stop failure is not swallowed",
+			message: "`systemctl stop tui-router-roles-revert.service " +
+				"tui-router-roles-revert.timer` failed: Access denied",
+			want: false,
+		},
+		{
+			name:    "an escalation failure is not swallowed",
+			message: "sudo needs a password: run `sudo -v` in another terminal, then retry",
+			want:    false,
+		},
+		{
+			name:    "another unit's absence is not ours",
+			message: "`systemctl stop dnsmasq.service` failed: Unit dnsmasq.service not loaded.",
+			want:    false,
+		},
+		{name: "empty", message: "", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CancelRevertFailureIsHarmless(tc.message); got != tc.want {
+				t.Errorf("CancelRevertFailureIsHarmless(%q) = %v, want %v",
+					tc.message, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -376,4 +437,75 @@ func FuzzParseUpdateCheck(f *testing.F) {
 			t.Errorf("an unavailable reading must carry a reason: %+v", u)
 		}
 	})
+}
+
+// stubSystemctl writes an executable stand-in for systemctl that records the
+// argv it was given, prints message on stderr and exits with code. It is the
+// only way to drive Real.CancelRevert's reading of a real exit status without
+// touching the machine's own units.
+func stubSystemctl(t *testing.T, message string, code int) (systemctl *runner.Runner, argvFile string) {
+	t.Helper()
+	dir := t.TempDir()
+	argvFile = filepath.Join(dir, "argv")
+	stub := filepath.Join(dir, "systemctl-stub")
+	script := "#!/bin/sh\n" +
+		"printf '%s' \"$*\" > " + argvFile + "\n" +
+		"echo " + strconv.Quote(message) + " >&2\n" +
+		"exit " + strconv.Itoa(code) + "\n"
+	//nolint:gosec // a stand-in for a binary has to be executable, in this test's own tempdir
+	if err := os.WriteFile(stub, []byte(script), 0o700); err != nil {
+		t.Fatalf("writing the systemctl stub: %v", err)
+	}
+	// A distinct Bin name keeps the runner off the host's real systemctl:
+	// exec.LookPath must miss, so the search path below is what resolves.
+	systemctl, err := runner.New(runner.Options{
+		Bin: "tui-router-test-systemctl", SearchPaths: []string{stub},
+		PrivilegedReads: &unprivileged,
+	})
+	if err != nil {
+		t.Fatalf("building the stub runner: %v", err)
+	}
+	return systemctl, argvFile
+}
+
+// The race the keep gesture hits on a real router: systemd collects the
+// transient service, `systemctl stop` exits 5 saying the unit is not loaded,
+// and the revert is disarmed all the same. The cancel must report success.
+func TestCancelRevertToleratesCollectedUnits(t *testing.T) {
+	systemctl, argvFile := stubSystemctl(t,
+		"Failed to stop tui-router-roles-revert.service: "+
+			"Unit tui-router-roles-revert.service not loaded.", 5)
+	r := &Real{systemctl: systemctl}
+
+	if err := r.CancelRevert(context.Background()); err != nil {
+		t.Fatalf("CancelRevert() = %v, want nil for units that are already gone", err)
+	}
+
+	argv, err := os.ReadFile(argvFile) //nolint:gosec // the path is a test tempdir file
+	if err != nil {
+		t.Fatalf("reading the recorded argv: %v", err)
+	}
+	// The stub is resolved under its own name, so the runner keeps the "systemctl"
+	// argv[0] it would drop for the real binary; what matters here is the order
+	// of the two units behind it.
+	want := "systemctl stop tui-router-roles-revert.service tui-router-roles-revert.timer"
+	if got := string(argv); got != want {
+		t.Errorf("systemctl argv = %q, want %q", got, want)
+	}
+}
+
+// A cancel that failed for any other reason still reaches the status line:
+// the operator must not be told the revert is disarmed when it is not.
+func TestCancelRevertReportsRealFailures(t *testing.T) {
+	systemctl, _ := stubSystemctl(t,
+		"Failed to stop tui-router-roles-revert.service: Access denied", 1)
+	r := &Real{systemctl: systemctl}
+
+	err := r.CancelRevert(context.Background())
+	if err == nil {
+		t.Fatal("CancelRevert() = nil, want the access-denied failure")
+	}
+	if !strings.Contains(err.Error(), "Access denied") {
+		t.Errorf("CancelRevert() = %v, want a message naming the real failure", err)
+	}
 }
