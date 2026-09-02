@@ -96,9 +96,20 @@ type Throughput struct {
 	TxBps float64 `json:"txBps"`
 }
 
+// The DHCP servers the cockpit can recognise. The first two are packages,
+// detected by their binary; the third is systemd-networkd's own server, which
+// is not a package at all — it is a [DHCPServer] section in a .network unit,
+// and it is what an Omarchy Router runs.
+const (
+	ServerDnsmasq  = "dnsmasq"
+	ServerKea      = "kea"
+	ServerNetworkd = "systemd-networkd"
+)
+
 // DHCP is the state of a DHCP server on this machine.
 type DHCP struct {
-	// Server is "dnsmasq", "kea" or "" when none is present.
+	// Server is "dnsmasq", "kea", "systemd-networkd" or "" when none is
+	// present.
 	Server string `json:"server,omitempty"`
 	// Active reports whether the server unit is running.
 	Active bool `json:"active"`
@@ -107,6 +118,17 @@ type DHCP struct {
 	Leases int `json:"leases"`
 	// Reason is why the state is unknown, when it is.
 	Reason string `json:"reason,omitempty"`
+	// Link is the interface the server serves, known only for the networkd
+	// server: its [Match] Name= names one link, while dnsmasq and Kea listen
+	// on whatever their own configuration says.
+	Link string `json:"link,omitempty"`
+	// PoolStart and PoolEnd are the first and last address the server hands
+	// out, empty when the pool could not be worked out.
+	PoolStart string `json:"poolStart,omitempty"`
+	PoolEnd   string `json:"poolEnd,omitempty"`
+	// Units are the .network unit and drop-in paths the networkd server was
+	// read from, so --check says which files the reading rests on.
+	Units []string `json:"units,omitempty"`
 }
 
 // WGInterface is one WireGuard interface and how many peers it carries.

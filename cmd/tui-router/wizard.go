@@ -536,12 +536,17 @@ func (w *wizard) viewDone(t theme.Theme, width int) string {
 		lines = append(lines, t.Danger.Render("Apply failed"), "",
 			t.Base.Render(ui.Truncate(w.applyErr, width-6)))
 	} else {
-		lines = append(lines, t.OK.Render("Applied"))
+		lines = append(lines, t.OK.Render("Applied"), "",
+			t.Base.Render(ui.Truncate(router.AppliedSummary, width-6)))
 	}
+	// The command's combined output carries its stderr, which on some
+	// machines is only a library warning. It is shown, because a reader may
+	// need it, but muted and under a heading that names its source — never as
+	// the verdict, which the tool states itself above.
 	if w.result.Output != "" {
-		lines = append(lines, "")
+		lines = append(lines, "", t.Muted.Render(router.ApplyOutputHeading))
 		for _, l := range strings.Split(w.result.Output, "\n") {
-			lines = append(lines, t.Base.Render(ui.Truncate(l, width-6)))
+			lines = append(lines, t.Muted.Render(ui.Truncate(l, width-6)))
 		}
 	}
 	switch {

@@ -1,0 +1,10 @@
+# systemd's own container template: a real DHCP server on a null address the
+# daemon fills in per interface, so there is no pool to name.
+[Match]
+Name=ve-*
+
+[Network]
+Address=0.0.0.0/28
+LinkLocalAddressing=yes
+DHCPServer=yes
+IPMasquerade=both

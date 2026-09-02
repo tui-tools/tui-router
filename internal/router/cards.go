@@ -3,6 +3,7 @@ package router
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // Cards turns a snapshot into the five cockpit panels. prev, when non-nil, is
@@ -210,15 +211,75 @@ func dhcpCard(snap Snapshot) Card {
 		status = StatusWarn
 		state = "stopped"
 	}
-	lines := []string{"server: " + d.Server, "state:  " + state}
+	return Card{Title: "DHCP", Status: status,
+		Summary: dhcpSummary(d, state), Lines: dhcpLines(d, state)}
+}
+
+// dhcpLines is the card's detail. A card shows only its first rows until it is
+// selected, so each server leads with what its headline could not fit: the
+// networkd one already names the server and the link, and what is left to say
+// is the pool, the leases and the unit the reading rests on.
+func dhcpLines(d DHCP, state string) []string {
+	var lines []string
+	if d.Server == ServerNetworkd {
+		if pool := dhcpPool(d); pool != "" {
+			lines = append(lines, "pool:   "+pool)
+		}
+		if d.Leases >= 0 {
+			lines = append(lines, "leases: "+strconv.Itoa(d.Leases))
+		}
+		lines = append(lines, "state:  "+state, "server: "+d.Server)
+		if d.Link != "" {
+			lines = append(lines, "link:   "+d.Link)
+		}
+		for _, unit := range d.Units {
+			lines = append(lines, "unit:   "+unit)
+		}
+		return lines
+	}
+	lines = []string{"server: " + d.Server, "state:  " + state}
 	if d.Leases >= 0 {
 		lines = append(lines, "leases: "+strconv.Itoa(d.Leases))
 	}
-	summary := d.Server + " · " + state
-	if d.Leases >= 0 {
-		summary += " · " + strconv.Itoa(d.Leases) + " leases"
+	return lines
+}
+
+// dhcpSummary is the card's headline. The networkd server names the link and
+// the pool it serves, because "systemd-networkd" alone says nothing about
+// which LAN is being served: the server is systemd itself, and the interesting
+// facts are which unit turned it on and what it hands out. dnsmasq and Kea are
+// named by their package and keep the line they always had.
+func dhcpSummary(d DHCP, state string) string {
+	if d.Server != ServerNetworkd {
+		summary := d.Server + " · " + state
+		if d.Leases >= 0 {
+			summary += " · " + strconv.Itoa(d.Leases) + " leases"
+		}
+		return summary
 	}
-	return Card{Title: "DHCP", Status: status, Summary: summary, Lines: lines}
+	parts := []string{d.Server}
+	if d.Link != "" {
+		parts = append(parts, d.Link)
+	}
+	if pool := dhcpPool(d); pool != "" {
+		parts = append(parts, "pool "+pool)
+	}
+	if state != "active" {
+		parts = append(parts, state)
+	}
+	if d.Leases >= 0 {
+		parts = append(parts, strconv.Itoa(d.Leases)+" leases")
+	}
+	return strings.Join(parts, " · ")
+}
+
+// dhcpPool renders the address range the server hands out, empty when it is
+// not known.
+func dhcpPool(d DHCP) string {
+	if d.PoolStart == "" || d.PoolEnd == "" {
+		return ""
+	}
+	return d.PoolStart + "-" + d.PoolEnd
 }
 
 // vpnCard summarises the WireGuard interfaces, their peers, and whether a
