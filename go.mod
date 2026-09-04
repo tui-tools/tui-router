@@ -5,7 +5,7 @@ go 1.27.0
 require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/tui-tools/tui-kit v0.3.0
+	github.com/tui-tools/tui-kit v0.3.1
 )
 
 require (
