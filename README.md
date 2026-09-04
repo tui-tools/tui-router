@@ -122,7 +122,7 @@ Not packaged for these yet; the static binary works everywhere in the meantime.
 ### Arch Linux — coming soon
 
 Needs the tui-tools repository, which is a [one-time
-setup](https://tui-tools.github.io/install/).
+setup](https://tui.tools/install/).
 
 The one-liner detects the distribution and adds the repository and its signing
 key:
@@ -156,7 +156,7 @@ Available once tui-router's first release lands in pkgs.tui.tools.
 ### Debian and Ubuntu — coming soon
 
 Needs the tui-tools repository, which is a [one-time
-setup](https://tui-tools.github.io/install/).
+setup](https://tui.tools/install/).
 
 The one-liner detects the distribution and adds the repository and its signing
 key:
@@ -189,7 +189,7 @@ Available once tui-router's first release lands in pkgs.tui.tools.
 ### Fedora and RHEL — coming soon
 
 Needs the tui-tools repository, which is a [one-time
-setup](https://tui-tools.github.io/install/).
+setup](https://tui.tools/install/).
 
 The one-liner detects the distribution and adds the repository and its signing
 key:
@@ -233,6 +233,8 @@ it before installing:
 ```sh
 sha256sum -c checksums.txt --ignore-missing
 ```
+
+Website: https://tui.tools/tools/tui-router/
 <!-- install:end -->
 
 ## Usage
