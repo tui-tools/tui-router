@@ -33,11 +33,25 @@ func Cards(snap Snapshot, prev *Snapshot, installed func(string) bool) []Card {
 			card = updatesCard(snap)
 		}
 		card.Kind = kind
-		card.Tool = CardTool[kind]
-		card.ToolInstalled = installed(card.Tool)
+		card.Tool, card.ToolInstalled, card.ToolHint = resolveTool(kind, installed)
 		cards = append(cards, card)
 	}
 	return cards
+}
+
+// resolveTool picks the binary a card hands off to. The current name wins
+// whenever it is installed; when it is not and the card's legacy name is,
+// the legacy binary is used with a hint to upgrade. With neither present the
+// card names the current tool as not installed.
+func resolveTool(kind CardKind, installed func(string) bool) (tool string, ok bool, hint string) {
+	tool = CardTool[kind]
+	if installed(tool) {
+		return tool, true, ""
+	}
+	if legacy, has := CardToolLegacy[kind]; has && installed(legacy) {
+		return legacy, true, legacy + " is now " + tool + ": upgrade the package"
+	}
+	return tool, false, ""
 }
 
 // interfacesCard summarises the interfaces and their WAN/LAN roles.

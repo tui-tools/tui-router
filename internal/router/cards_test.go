@@ -107,3 +107,30 @@ func TestDemoRendersWithNothingInstalled(t *testing.T) {
 		}
 	}
 }
+
+func TestVPNCardHandsOffToTuiWireguard(t *testing.T) {
+	cases := []struct {
+		name      string
+		installed map[string]bool
+		tool      string
+		ok        bool
+		hint      bool
+	}{
+		{"current name installed", map[string]bool{"tui-wireguard": true, "tui-vpn": true}, "tui-wireguard", true, false},
+		{"only the old name", map[string]bool{"tui-vpn": true}, "tui-vpn", true, true},
+		{"neither", map[string]bool{}, "tui-wireguard", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tool, ok, hint := resolveTool(CardVPN, func(b string) bool { return tc.installed[b] })
+			if tool != tc.tool || ok != tc.ok || (hint != "") != tc.hint {
+				t.Errorf("resolveTool = (%q, %v, %q), want (%q, %v, hint=%v)",
+					tool, ok, hint, tc.tool, tc.ok, tc.hint)
+			}
+		})
+	}
+	// A card without a legacy name never falls back.
+	if tool, ok, _ := resolveTool(CardFirewall, func(string) bool { return false }); tool != "tui-firewall" || ok {
+		t.Errorf("firewall resolveTool = (%q, %v)", tool, ok)
+	}
+}

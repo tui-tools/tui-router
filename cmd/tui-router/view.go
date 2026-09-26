@@ -129,6 +129,9 @@ func (a *app) summaryFacts() []ui.Fact {
 func (a *app) defaultStatus() string {
 	if card, ok := a.selected(); ok {
 		if card.ToolInstalled {
+			if card.ToolHint != "" {
+				return "enter opens " + card.Tool + " (" + card.ToolHint + ")  ·  ? for help"
+			}
 			return "enter opens " + card.Tool + "  ·  ? for help"
 		}
 		return card.Tool + " not installed  ·  ? for help"

@@ -5,7 +5,7 @@
 // tool that manages each area when you press ENTER on its card.
 //
 // It changes nothing itself. Every mutation happens in the tool a card
-// launches (tui-firewall, tui-network, tui-traffic, tui-vpn), through that
+// launches (tui-firewall, tui-network, tui-traffic, tui-wireguard), through that
 // tool's own preview-and-confirm. The cockpit is the overview and the way in.
 package main
 

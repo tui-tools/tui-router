@@ -105,7 +105,7 @@ func describeBackends(results []compat.Result) string {
 func describeTools() string {
 	seen := map[string]bool{}
 	var parts []string
-	for _, kind := range []string{"tui-network", "tui-firewall", "tui-traffic", "tui-vpn"} {
+	for _, kind := range []string{"tui-network", "tui-firewall", "tui-traffic", "tui-wireguard"} {
 		if seen[kind] {
 			continue
 		}
@@ -115,6 +115,14 @@ func describeTools() string {
 			state = "present"
 		}
 		parts = append(parts, kind+" "+state)
+	}
+	// A renamed tool's old binary is worth naming when it is still here: the
+	// card hands off to it, and the report should say why.
+	for _, card := range router.Kinds {
+		legacy, ok := router.CardToolLegacy[card]
+		if ok && router.OnPath(legacy) {
+			parts = append(parts, legacy+" present (old name of "+router.CardTool[card]+")")
+		}
 	}
 	return strings.Join(parts, ", ")
 }

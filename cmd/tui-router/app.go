@@ -357,7 +357,11 @@ func (a *app) launch() tea.Cmd {
 		return nil
 	}
 	a.busy = true
-	a.setStatusf(ui.StatusInfo, "running %s…", card.Tool)
+	if card.ToolHint != "" {
+		a.setStatusf(ui.StatusWarn, "running %s… (%s)", card.Tool, card.ToolHint)
+	} else {
+		a.setStatusf(ui.StatusInfo, "running %s…", card.Tool)
+	}
 	name := card.Tool
 	return tea.Exec(process, func(err error) tea.Msg {
 		return launchedMsg{name: name, err: err}
