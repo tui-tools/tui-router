@@ -95,3 +95,14 @@ func assertAbsent(t *testing.T, block, name, what string) {
 		}
 	}
 }
+
+// --report names every card's managing tool, tui-tailscale included, each
+// once.
+func TestDescribeToolsNamesEveryCardTool(t *testing.T) {
+	got := describeTools()
+	for _, tool := range []string{"tui-network", "tui-firewall", "tui-traffic", "tui-wireguard", "tui-tailscale", "tui-update"} {
+		if strings.Count(got, tool+" ") != 1 {
+			t.Errorf("describeTools() = %q, want %s named once", got, tool)
+		}
+	}
+}

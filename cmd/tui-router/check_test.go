@@ -69,4 +69,21 @@ func TestRunCheckDemo(t *testing.T) {
 			t.Errorf("check's DHCP card = %q, want %q", card.Summary, want)
 		}
 	}
+	// The Tailnet card is additive: it hands off to tui-tailscale, and the
+	// snapshot carries what tui-tailscale --check reported.
+	if tn := report.Snapshot.Tailnet; !tn.Available || !tn.ControlPlane || tn.Next != "unit" {
+		t.Errorf("check's tailnet snapshot = %+v", tn)
+	}
+	found := false
+	for _, card := range report.Cards {
+		if card.Kind == string(router.CardTailnet) {
+			found = true
+			if card.Tool != "tui-tailscale" || card.Summary != "node online · headscale: unit" {
+				t.Errorf("check's tailnet card = %+v", card)
+			}
+		}
+	}
+	if !found {
+		t.Error("check has no tailnet card")
+	}
 }

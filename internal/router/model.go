@@ -25,12 +25,15 @@ const (
 	CardTraffic    CardKind = "traffic"
 	CardDHCP       CardKind = "dhcp"
 	CardVPN        CardKind = "vpn"
+	CardTailnet    CardKind = "tailnet"
 	CardUpdates    CardKind = "updates"
 )
 
 // Kinds is the fixed card order. A card that moved between reads would be a
 // card nobody could learn the position of.
-var Kinds = []CardKind{CardInterfaces, CardFirewall, CardTraffic, CardDHCP, CardVPN, CardUpdates}
+var Kinds = []CardKind{
+	CardInterfaces, CardFirewall, CardTraffic, CardDHCP, CardVPN, CardTailnet, CardUpdates,
+}
 
 // Status is a card's verdict, used only to colour it. A cockpit reports, it
 // does not grade a machine, so the palette is deliberately small: ok for a
@@ -149,6 +152,45 @@ type VPN struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// Tailnet is the self-hosted Tailscale state, read from `tui-tailscale
+// --check`: this host as a tailnet node, and whether it also runs the
+// headscale control plane. Only the facts the card shows are kept; the rest
+// of that document (identity-provider names, paths, keys' counts) stays with
+// tui-tailscale.
+type Tailnet struct {
+	// Available reports whether the check could run at all; when it is false,
+	// Reason says why (the binary is absent, or the check failed).
+	Available bool `json:"available"`
+	// Reason is why the state is unknown, when it is.
+	Reason string `json:"reason,omitempty"`
+	// Client reports whether the tailscale client is installed on this host.
+	Client bool `json:"client"`
+	// Daemon reports whether tailscaled is running.
+	Daemon bool `json:"daemon"`
+	// State is tailscaled's backend state as the client names it: Running,
+	// NeedsLogin, Stopped, Starting… Empty when it could not be read.
+	State string `json:"state,omitempty"`
+	// Online reports whether the node is connected to its control server.
+	Online bool `json:"online"`
+	// Peers and PeersOnline count the other nodes this one can see.
+	Peers       int `json:"peers"`
+	PeersOnline int `json:"peersOnline"`
+	// ControlPlane reports whether headscale runs on this host.
+	ControlPlane bool `json:"controlPlane"`
+	// Nodes and NodesOnline are the control plane's registered nodes, read
+	// only when ControlPlane is true.
+	Nodes       int `json:"nodes"`
+	NodesOnline int `json:"nodesOnline"`
+	// Next is the control plane's first missing step as tui-tailscale names
+	// it (install, server, unit, ports, identity, first-node, routes, or
+	// ready), and NextStep says it in words.
+	Next     string `json:"next,omitempty"`
+	NextStep string `json:"nextStep,omitempty"`
+}
+
+// TailnetReady is the Next value that means the control plane lacks nothing.
+const TailnetReady = "ready"
+
 // Updates is the pending-updates state, read from `tui-update --check`.
 type Updates struct {
 	// Available reports whether the check could run at all; when it is false,
@@ -169,6 +211,7 @@ type Snapshot struct {
 	Counters   []Counter       `json:"-"`
 	DHCP       DHCP            `json:"dhcp"`
 	VPN        VPN             `json:"vpn"`
+	Tailnet    Tailnet         `json:"tailnet"`
 	Updates    Updates         `json:"updates"`
 	// Roles is the router profile's WAN/LAN role assignment state, which is
 	// what decides whether the cockpit offers the roles wizard.
@@ -186,6 +229,7 @@ var CardTool = map[CardKind]string{
 	CardTraffic:    "tui-traffic",
 	CardDHCP:       "tui-network",
 	CardVPN:        "tui-wireguard",
+	CardTailnet:    "tui-tailscale",
 	CardUpdates:    "tui-update",
 }
 

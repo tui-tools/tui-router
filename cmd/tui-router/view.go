@@ -18,6 +18,13 @@ const (
 	// minCardWidth is the narrowest a card is allowed to be before the grid
 	// drops to a single column.
 	minCardWidth = 34
+	// minInterior is a card's full interior: its title, its summary and the
+	// managing tool at the foot.
+	minInterior = 3
+	// compactInterior is the interior of a card on a screen too short for
+	// every row at minInterior (seven cards in two columns on 80x24 with the
+	// roles banner up): the foot moves onto the title row.
+	compactInterior = 2
 )
 
 // View renders the whole screen.
@@ -142,13 +149,7 @@ func (a *app) defaultStatus() string {
 // grid lays the cards out in as many columns as the width allows, then stacks
 // the rows to fill the body.
 func (a *app) grid() string {
-	columns := a.width / (minCardWidth + cardGap)
-	if columns < 1 {
-		columns = 1
-	}
-	if columns > len(a.cards) {
-		columns = len(a.cards)
-	}
+	columns := gridColumns(a.width, len(a.cards))
 	cardWidth := (a.width - (columns-1)*cardGap) / columns
 
 	// Fit the grid to the body: each card's interior is the height left over
@@ -156,24 +157,37 @@ func (a *app) grid() string {
 	// card with more detail than fits ends in an ellipsis rather than pushing
 	// the top of the screen off.
 	rowsCount := (len(a.cards) + columns - 1) / columns
-	interior := 3
+	interior := minInterior
 	if rowsCount > 0 {
-		interior = max((a.bodyHeight()-rowsCount*2)/rowsCount, 3)
-	}
-
-	boxes := make([]string, len(a.cards))
-	for i, card := range a.cards {
-		boxes[i] = a.card(card, i == a.cursor, cardWidth, interior)
+		interior = max((a.bodyHeight()-rowsCount*2)/rowsCount, compactInterior)
 	}
 
 	var rows []string
-	for i := 0; i < len(boxes); i += columns {
-		end := min(i+columns, len(boxes))
-		row := lipgloss.JoinHorizontal(lipgloss.Top,
-			withGaps(boxes[i:end], cardGap)...)
+	for i := 0; i < len(a.cards); i += columns {
+		end := min(i+columns, len(a.cards))
+		// A short last row shares the whole width between its cards, so an
+		// odd card out reads as a full-width panel, not a hole in the grid.
+		width := cardWidth
+		if n := end - i; n < columns {
+			full := columns*cardWidth + (columns-1)*cardGap
+			width = (full - (n-1)*cardGap) / n
+		}
+		boxes := make([]string, 0, end-i)
+		for j := i; j < end; j++ {
+			boxes = append(boxes, a.card(a.cards[j], j == a.cursor, width, interior))
+		}
+		row := lipgloss.JoinHorizontal(lipgloss.Top, withGaps(boxes, cardGap)...)
 		rows = append(rows, row)
 	}
 	return strings.Join(rows, "\n")
+}
+
+// gridColumns is how many cards fit side by side: every column at least
+// minCardWidth wide, with a gap between two columns and none after the last,
+// never more columns than cards and never fewer than one.
+func gridColumns(width, cards int) int {
+	columns := (width + cardGap) / (minCardWidth + cardGap)
+	return max(min(columns, cards), 1)
 }
 
 // withGaps inserts a spacer column between the boxes of a row.
@@ -204,21 +218,34 @@ func (a *app) card(card router.Card, selected bool, width, interior int) string 
 
 	statusStyle := a.styleFor(card.Status)
 	title := statusStyle.Render(glyph(card.Status)+" ") + a.theme.Title.Render(card.Title)
+	summary := a.theme.Muted.Render(ui.Truncate(card.Summary, inner))
 
-	// The title and the foot are always shown; the rest of the budget goes to
-	// the summary and the detail lines, in that order.
-	body := []string{a.theme.Muted.Render(ui.Truncate(card.Summary, inner))}
-	for _, line := range card.Lines {
-		body = append(body, a.theme.Base.Render(ui.Truncate(line, inner)))
+	var lines []string
+	if interior < minInterior {
+		// Compact: the title row carries the foot, right-aligned, and the
+		// summary is the only body line. The selected card's tool is also on
+		// the status line, so nothing is lost when the foot is cut.
+		lines = []string{a.titleWithFoot(card, title, inner), summary}
+	} else {
+		// The title and the foot are always shown; the rest of the budget
+		// goes to the summary and the detail lines, in that order.
+		body := []string{summary}
+		for _, line := range card.Lines {
+			body = append(body, a.theme.Base.Render(ui.Truncate(line, inner)))
+		}
+		budget := max(interior-2, 1)
+		if len(body) > budget {
+			// With room for one line the summary keeps it; with more, the
+			// last line says there is detail that did not fit.
+			if budget > 1 {
+				body = append(body[:budget-1], a.theme.Muted.Render("…"))
+			} else {
+				body = body[:1]
+			}
+		}
+		lines = append([]string{title}, body...)
+		lines = append(lines, a.toolFoot(card, inner))
 	}
-	budget := max(interior-2, 1)
-	if len(body) > budget {
-		body = body[:budget-1]
-		body = append(body, a.theme.Muted.Render("…"))
-	}
-
-	lines := append([]string{title}, body...)
-	lines = append(lines, a.toolFoot(card, inner))
 
 	border := lipgloss.RoundedBorder()
 	box := lipgloss.NewStyle().
@@ -241,6 +268,18 @@ func (a *app) toolFoot(card router.Card, width int) string {
 		return a.theme.OK.Render(ui.Truncate("↵ "+card.Tool, width))
 	}
 	return a.theme.Muted.Render(ui.Truncate(card.Tool+" (not installed)", width))
+}
+
+// titleWithFoot puts the tool foot at the right end of the title row, cut to
+// the room the title leaves, or dropped when there is no useful room.
+func (a *app) titleWithFoot(card router.Card, title string, width int) string {
+	room := width - lipgloss.Width(title) - 2
+	if room < 6 {
+		return title
+	}
+	foot := a.toolFoot(card, room)
+	gap := width - lipgloss.Width(title) - lipgloss.Width(foot)
+	return title + strings.Repeat(" ", max(gap, 1)) + foot
 }
 
 // styleFor maps a verdict to a colour.

@@ -58,6 +58,12 @@ check "check carries the updates card" \
   "sudo -n $bin --check" \
   '"kind": "updates"'
 
+# The tailnet card reads tui-tailscale --check when it is installed and says
+# "tui-tailscale (not installed)" when it is not; either way it is a card.
+check "check carries the tailnet card" \
+  "sudo -n $bin --check" \
+  '"kind": "tailnet"'
+
 # The roles block reports whether this is a router-profile host and whether
 # the WAN/LAN roles are assigned — the state the roles wizard acts on.
 check "check reports the roles state" \

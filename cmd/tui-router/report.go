@@ -105,16 +105,19 @@ func describeBackends(results []compat.Result) string {
 func describeTools() string {
 	seen := map[string]bool{}
 	var parts []string
-	for _, kind := range []string{"tui-network", "tui-firewall", "tui-traffic", "tui-wireguard"} {
-		if seen[kind] {
+	// Every card's tool, in card order, each named once (two cards share
+	// tui-network).
+	for _, card := range router.Kinds {
+		tool := router.CardTool[card]
+		if seen[tool] {
 			continue
 		}
-		seen[kind] = true
+		seen[tool] = true
 		state := "absent"
-		if router.OnPath(kind) {
+		if router.OnPath(tool) {
 			state = "present"
 		}
-		parts = append(parts, kind+" "+state)
+		parts = append(parts, tool+" "+state)
 	}
 	// A renamed tool's old binary is worth naming when it is still here: the
 	// card hands off to it, and the report should say why.

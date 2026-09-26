@@ -11,7 +11,7 @@ import (
 // Fake is the in-memory backend behind --demo and the tests: a plausible
 // office router with two interfaces, an active firewall, live traffic, a
 // systemd-networkd DHCP server handing out leases on the LAN and a WireGuard
-// interface with peers. It builds
+// interface with peers, and a tailnet node that also runs headscale. It builds
 // every card so the whole cockpit renders on a machine that has none of these
 // backends installed — and it reports every managing tool as absent, so ENTER
 // says so rather than trying to launch anything.
@@ -147,7 +147,17 @@ func (f *Fake) Read(_ context.Context) (Snapshot, error) {
 			Units: []string{"/etc/systemd/network/20-lan0.network"},
 		},
 		Updates: Updates{Available: true, Pending: 4, Security: 1},
-		Roles:   f.readRoles(),
+		// The demo router is a tailnet node that also runs the headscale
+		// control plane for the office, one step short of ready: the same
+		// state `tui-tailscale --demo --check` reports.
+		Tailnet: Tailnet{
+			Available: true, Client: true, Daemon: true, State: "Running",
+			Online: true, Peers: 2, PeersOnline: 2,
+			ControlPlane: true, Nodes: 3, NodesOnline: 3,
+			Next:     "unit",
+			NextStep: "headscale runs but won't start at boot · S or O end with the enable (or: systemctl enable headscale)",
+		},
+		Roles: f.readRoles(),
 		VPN: VPN{
 			Interfaces: []WGInterface{{Name: "wg0", Peers: 3, Handshakes: 2}},
 			Headscale:  false,
