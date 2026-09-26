@@ -65,7 +65,7 @@ tidy:
 screenshots: build
 	python3 $(KIT)/tools/render-screenshots.py \
 		--bin $(BIN)/$(TOOL) --name $(TOOL) --out docs/screenshots \
-		--screen main= --screen vpn=G --screen help=?
+		--screen main= --screen vpn=Gk --screen help=?
 
 ## readme: regenerate the generated README sections from tool.json.
 readme:

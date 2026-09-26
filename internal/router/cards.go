@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Cards turns a snapshot into the five cockpit panels. prev, when non-nil, is
+// Cards turns a snapshot into the cockpit panels, one per Kinds entry. prev, when non-nil, is
 // an earlier snapshot used to derive the traffic throughput; installed reports
 // whether each card's managing tool is on the machine. This is the single
 // place the model becomes what the screen and --check both render, so the two
@@ -29,6 +29,8 @@ func Cards(snap Snapshot, prev *Snapshot, installed func(string) bool) []Card {
 			card = dhcpCard(snap)
 		case CardVPN:
 			card = vpnCard(snap)
+		case CardTailnet:
+			card = tailnetCard(snap)
 		case CardUpdates:
 			card = updatesCard(snap)
 		}
@@ -330,6 +332,106 @@ func vpnCard(snap Snapshot) Card {
 		summary += " · headscale"
 	}
 	return Card{Title: "VPN", Status: StatusOK, Summary: summary, Lines: lines}
+}
+
+// tailnetCard summarises the self-hosted Tailscale state tui-tailscale
+// reported: this host as a node, and the headscale control plane when this
+// host runs it, with the first step it still lacks. The headline fits a
+// narrow card; the detail lines carry the counts and the step in words.
+func tailnetCard(snap Snapshot) Card {
+	t := snap.Tailnet
+	if !t.Available {
+		reason := t.Reason
+		if reason == "" {
+			reason = TailnetNotInstalled
+		}
+		card := Card{Title: "Tailnet", Status: StatusUnknown, Summary: reason}
+		if reason == TailnetNotInstalled {
+			card.Lines = []string{"it comes from pkgs.tui.tools"}
+		}
+		return card
+	}
+
+	node, nodeOK := tailnetNode(t)
+	lines := []string{"node:    " + node}
+	if t.Client && t.Daemon {
+		lines = append(lines, fmt.Sprintf("peers:   %d of %d online", t.PeersOnline, t.Peers))
+	}
+
+	if !t.ControlPlane {
+		status := StatusInfo
+		summary := "node " + node
+		switch {
+		case !t.Client:
+			summary = "no tailscale client · no headscale"
+		case nodeOK:
+			status = StatusOK
+			summary = fmt.Sprintf("node online · %d of %d peers", t.PeersOnline, t.Peers)
+		default:
+			status = StatusWarn
+		}
+		return Card{Title: "Tailnet", Status: status, Summary: summary, Lines: lines}
+	}
+
+	next := t.Next
+	if next == "" {
+		next = "unknown"
+	}
+	// The control plane leads the detail: the headline already says where
+	// the node stands, and a narrow card has room for one line under it.
+	control := []string{fmt.Sprintf("control: %d of %d nodes online", t.NodesOnline, t.Nodes)}
+	if next != TailnetReady && t.NextStep != "" {
+		control = append(control, "next:    "+t.NextStep)
+	}
+	lines = append(control, lines...)
+	status := StatusOK
+	if next != TailnetReady || (t.Client && !nodeOK) {
+		status = StatusWarn
+	}
+	head := "headscale ready"
+	if next != TailnetReady {
+		head = "headscale: " + next
+	}
+	summary := head + " · " + strconv.Itoa(t.Nodes) + " nodes"
+	if t.Client {
+		summary = "node " + tailnetShort(t, nodeOK) + " · " + head
+	}
+	return Card{Title: "Tailnet", Status: status, Summary: summary, Lines: lines}
+}
+
+// tailnetNode says where this host stands as a node, and whether that is the
+// healthy "running and online" state.
+func tailnetNode(t Tailnet) (string, bool) {
+	switch {
+	case !t.Client:
+		return "no tailscale client", false
+	case !t.Daemon:
+		return "tailscaled stopped", false
+	case t.State == "Running" && t.Online:
+		return "online", true
+	case t.State == "Running":
+		return "running, offline", false
+	case t.State == "":
+		return "state unknown", false
+	default:
+		return t.State, false
+	}
+}
+
+// tailnetShort is the node's state in the one word a headline has room for.
+func tailnetShort(t Tailnet, ok bool) string {
+	switch {
+	case ok:
+		return "online"
+	case !t.Daemon:
+		return "stopped"
+	case t.State == "Running":
+		return "offline"
+	case t.State == "":
+		return "unknown"
+	default:
+		return t.State
+	}
 }
 
 // updatesCard summarises the pending updates as tui-update reported them.

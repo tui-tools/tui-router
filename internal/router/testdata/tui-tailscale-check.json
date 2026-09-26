@@ -1,0 +1,157 @@
+{
+  "tool": "tui-tailscale",
+  "version": "dev",
+  "backend": "demo",
+  "describe": "tailscale via sudo -n  ·  demo (no changes are applied)",
+  "tailscale": {
+    "installed": true,
+    "daemonRunning": true,
+    "daemon": "running",
+    "backendState": "Running",
+    "clientVersion": "1.98.4",
+    "loginPending": false,
+    "loggedIn": true,
+    "online": true,
+    "loginServer": {
+      "set": true,
+      "https": true,
+      "tailscaleControl": false
+    },
+    "tailnetIpv4": true,
+    "tailnetIpv6": true,
+    "magicDns": true,
+    "healthWarnings": 0,
+    "loginProfiles": 2,
+    "prefsRead": true,
+    "prefs": {
+      "acceptRoutes": true,
+      "advertisedRoutes": 0,
+      "advertisesExitNode": false,
+      "usesExitNode": false,
+      "acceptDns": true,
+      "wantRunning": true,
+      "loggedOut": false,
+      "hostnameSet": false
+    },
+    "peers": {
+      "total": 2,
+      "online": 2,
+      "exitNodeOptions": 1,
+      "withRoutes": 1
+    }
+  },
+  "headscale": {
+    "present": true,
+    "configPresent": true,
+    "stateDirPresent": true,
+    "oidcConfigured": true,
+    "oidcInferred": true,
+    "oidcIssuer": "idp.example.com",
+    "controlPlane": {
+      "configPath": "/etc/headscale/config.yaml",
+      "readable": true,
+      "serviceState": "active",
+      "serviceEnabled": "disabled",
+      "serviceAccount": "headscale:headscale",
+      "ownershipChecked": true,
+      "ownershipOk": false,
+      "ownershipIssues": [
+        {
+          "path": "/var/lib/headscale/noise_private.key",
+          "role": "state",
+          "owner": "root:root",
+          "want": "headscale:headscale"
+        }
+      ],
+      "serverUrlSet": true,
+      "serverUrlValid": true,
+      "serverUrlHttps": true,
+      "serverUrlLoopback": false,
+      "serverUrlIsIp": false,
+      "transport": "reverse-proxy",
+      "baseDomain": "tailnet.example.com",
+      "baseDomainConflict": false,
+      "magicDns": true,
+      "listenPort": 8080,
+      "listenLoopback": true,
+      "oidcIssuer": "idp.example.com",
+      "oidcClientId": "headscale",
+      "oidcClientSecretSet": true,
+      "allowedDomains": 1,
+      "allowedGroups": 0,
+      "allowedUsers": 0,
+      "scope": [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "onlyStartIfOidcIsAvailable": true,
+      "pkce": true,
+      "oidcReadiness": {
+        "redirectHttps": true,
+        "allowListsNonEmpty": true,
+        "groupsWithNoGroupsIdp": false,
+        "usersOutsideDomains": 0
+      },
+      "dns": {
+        "magicDns": true,
+        "overrideLocalDns": true,
+        "globalNameservers": 2,
+        "splitDomains": 1,
+        "searchDomains": 1,
+        "extraRecords": 1,
+        "extraRecordsPath": false
+      }
+    },
+    "users": 2,
+    "nodes": 3,
+    "nodesOnline": 3,
+    "nodesExpired": 0,
+    "preAuthKeys": 2,
+    "nodeRoutes": [
+      {
+        "id": "2",
+        "advertised": 0,
+        "approved": 0,
+        "pending": 0,
+        "exitNode": "approved"
+      },
+      {
+        "id": "3",
+        "advertised": 2,
+        "approved": 1,
+        "pending": 1
+      }
+    ],
+    "readiness": {
+      "installed": true,
+      "serverConfigured": true,
+      "unitRunning": true,
+      "unitEnabled": false,
+      "oidcConfigured": true,
+      "preAuthKey": true,
+      "firstNode": true,
+      "pendingRegistrations": 2,
+      "refusedRegistrations": 1,
+      "ports": {
+        "source": "tui-firewall",
+        "controlPort": 443,
+        "control": "open",
+        "nodePort": 41641,
+        "node": "closed"
+      },
+      "routesPending": 1,
+      "routesApproved": false,
+      "canJoinMore": true,
+      "relays": "tailscale-public",
+      "relayHint": "relays go through Tailscale's public DERP servers when nodes cannot connect directly (derp.server.enabled is false) · S enables the embedded one",
+      "next": "unit",
+      "nextStep": "headscale runs but won't start at boot · S or O end with the enable (or: systemctl enable headscale)"
+    }
+  },
+  "joinProfiles": [
+    "laptop",
+    "subnet-router"
+  ],
+  "compat": []
+}

@@ -14,12 +14,13 @@ Every part of the router on one screen.
 tui-router is the read-only cockpit for a Linux router. It reads the machine
 with cheap system probes and draws one card per area — the interfaces and their
 WAN/LAN roles, the firewall's posture, live traffic per interface, the DHCP
-server and its leases, the WireGuard peers — and refreshes them in place.
+server and its leases, the WireGuard peers, the self-hosted tailnet — and
+refreshes them in place.
 
 It changes nothing itself. Press ENTER on a card and tui-router suspends, hands
 the terminal to the tool that manages that area — tui-firewall, tui-network,
-tui-traffic, tui-wireguard — and resumes when you leave it, the same handoff the
-family launcher uses. The overview is here; the change happens in the tool the
+tui-traffic, tui-wireguard, tui-tailscale — and resumes when you leave it, the
+same handoff the family launcher uses. The overview is here; the change happens in the tool the
 card opens, behind that tool's own preview and confirm.
 
 <!-- stability:start -->
@@ -37,14 +38,14 @@ card opens, behind that tool's own preview and confirm.
 | Traffic | the live throughput per interface, a small `/proc/net/dev` delta refreshed on a timer | tui-traffic |
 | DHCP | which DHCP server is serving the LAN and what it hands out: dnsmasq or Kea by their package, or systemd-networkd's own server — the `.network` unit (and its drop-ins) that carries `[DHCPServer]`, the link it matches, the pool its `Address=` and `PoolOffset=`/`PoolSize=` work out to, and the leases `networkctl status <link>` lists | tui-network |
 | VPN | any WireGuard interface and its peer count (from `wg show`), and whether a headscale control plane is present | tui-wireguard |
+| Tailnet | this host on a self-hosted tailnet, read from `tui-tailscale --check` (cached, re-read every minute): whether the node is online and how many peers it sees, whether this host runs the headscale control plane, its node count and the first step it still lacks (the `next` of tui-tailscale's readiness); "tui-tailscale (not installed)" when the binary is absent | tui-tailscale |
 | Updates | the pending and security update counts, read from `tui-update --check` (cached, re-read every few minutes); "tui-update not installed" when the binary is absent | tui-update |
 
 tui-wireguard was called tui-vpn before 0.5.0. On a machine that still has
 only the old `tui-vpn` binary, the VPN card hands off to it and the status line
 says it was renamed, so upgrade the package. The headscale control plane the
-card detects is managed by
-[tui-tailscale](https://tui.tools/tools/tui-tailscale/), which you run
-directly for now.
+VPN card detects has its own card, Tailnet, which hands off to
+[tui-tailscale](https://tui.tools/tools/tui-tailscale/).
 
 Every read is cheap and read-only. Most are unprivileged; the few that need
 root — the nftables ruleset, `ufw status`, the WireGuard dump — escalate with
@@ -107,7 +108,8 @@ tui-router --demo
 
 `--demo` drives a sample office router — two interfaces, an active firewall,
 live traffic, a systemd-networkd DHCP server handing out leases on the LAN, a
-WireGuard interface with peers, a pending-updates count, and an unassigned
+WireGuard interface with peers, a tailnet node that also runs a headscale
+control plane one step short of ready, a pending-updates count, and an unassigned
 roles.conf so the roles wizard can be walked end to end — every card renders
 and every flow works on a machine that has none of these backends installed.
 Nothing is read and nothing is changed.
@@ -230,7 +232,7 @@ Available once tui-router's first release lands in pkgs.tui.tools.
 ### Any distribution, static binary — coming soon
 
 ```sh
-curl -fsSL https://github.com/tui-tools/tui-router/releases/download/v0.3.4/tui-router_0.3.4_linux_amd64.tar.gz | tar -xz tui-router
+curl -fsSL https://github.com/tui-tools/tui-router/releases/download/v0.4.0/tui-router_0.4.0_linux_amd64.tar.gz | tar -xz tui-router
 sudo install -m0755 tui-router /usr/local/bin/tui-router
 ```
 

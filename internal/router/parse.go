@@ -179,6 +179,69 @@ func ParseUpdateCheck(text string) Updates {
 	return u
 }
 
+// tailscaleCheck mirrors the few facts this tool reads from the JSON document
+// `tui-tailscale --check` prints. The two top-level objects are pointers so a
+// document of the wrong shape (another tool's JSON, a truncated write) is
+// refused rather than read as "no client, no control plane".
+type tailscaleCheck struct {
+	Tool      string `json:"tool"`
+	Tailscale *struct {
+		Installed     bool   `json:"installed"`
+		DaemonRunning bool   `json:"daemonRunning"`
+		BackendState  string `json:"backendState"`
+		Online        bool   `json:"online"`
+		Peers         struct {
+			Total  int `json:"total"`
+			Online int `json:"online"`
+		} `json:"peers"`
+	} `json:"tailscale"`
+	Headscale *struct {
+		Present     bool `json:"present"`
+		Nodes       int  `json:"nodes"`
+		NodesOnline int  `json:"nodesOnline"`
+		Readiness   struct {
+			Next     string `json:"next"`
+			NextStep string `json:"nextStep"`
+		} `json:"readiness"`
+	} `json:"headscale"`
+}
+
+// ParseTailscaleCheck reads the node and control-plane facts from
+// `tui-tailscale --check`, defensively: a document that is not JSON, names
+// another tool, lacks both halves or carries a negative count comes back
+// not-available with a reason, never as an invented state.
+func ParseTailscaleCheck(text string) Tailnet {
+	var doc tailscaleCheck
+	if err := json.Unmarshal([]byte(text), &doc); err != nil {
+		return Tailnet{Reason: "unreadable tui-tailscale --check output"}
+	}
+	if doc.Tool != "" && doc.Tool != "tui-tailscale" {
+		return Tailnet{Reason: "tui-tailscale --check answered as " + doc.Tool}
+	}
+	if doc.Tailscale == nil || doc.Headscale == nil {
+		return Tailnet{Reason: "tui-tailscale --check reported no node or control plane"}
+	}
+	ts, hs := doc.Tailscale, doc.Headscale
+	t := Tailnet{
+		Available:    true,
+		Client:       ts.Installed,
+		Daemon:       ts.DaemonRunning,
+		State:        ts.BackendState,
+		Online:       ts.Online,
+		Peers:        ts.Peers.Total,
+		PeersOnline:  ts.Peers.Online,
+		ControlPlane: hs.Present,
+	}
+	if hs.Present {
+		t.Nodes, t.NodesOnline = hs.Nodes, hs.NodesOnline
+		t.Next, t.NextStep = hs.Readiness.Next, hs.Readiness.NextStep
+	}
+	if t.Peers < 0 || t.PeersOnline < 0 || t.Nodes < 0 || t.NodesOnline < 0 {
+		return Tailnet{Reason: "tui-tailscale --check reported a negative count"}
+	}
+	return t
+}
+
 // ParseProcNetDev turns /proc/net/dev into per-interface byte counters. The
 // file has two header lines and then `iface: rx-bytes rx-packets … tx-bytes …`
 // per interface, with the colon sometimes glued to the name.
