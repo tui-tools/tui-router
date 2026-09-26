@@ -24,6 +24,7 @@ type checkCard struct {
 	Summary   string          `json:"summary"`
 	Tool      string          `json:"tool"`
 	Installed bool            `json:"toolInstalled"`
+	Hint      string          `json:"toolHint,omitempty"`
 }
 
 // checkReport is the whole --check document.
@@ -61,6 +62,7 @@ func runCheck(backend router.Backend, backends []compat.Result, out io.Writer) e
 			Summary:   card.Summary,
 			Tool:      card.Tool,
 			Installed: card.ToolInstalled,
+			Hint:      card.ToolHint,
 		})
 	}
 

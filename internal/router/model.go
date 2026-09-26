@@ -185,8 +185,17 @@ var CardTool = map[CardKind]string{
 	CardFirewall:   "tui-firewall",
 	CardTraffic:    "tui-traffic",
 	CardDHCP:       "tui-network",
-	CardVPN:        "tui-vpn",
+	CardVPN:        "tui-wireguard",
 	CardUpdates:    "tui-update",
+}
+
+// CardToolLegacy names the binary a managing tool had before it was renamed.
+// A machine upgraded only partly can still carry the old binary and not the
+// new one; the card then hands off to the old name rather than claiming the
+// tool is missing, and says it was renamed. tui-vpn became tui-wireguard in
+// 0.5.0 (its headscale half moved to tui-tailscale).
+var CardToolLegacy = map[CardKind]string{
+	CardVPN: "tui-vpn",
 }
 
 // Card is one rendered panel: a title, a verdict, a headline and the detail
@@ -202,6 +211,9 @@ type Card struct {
 	// ToolInstalled reports whether that binary is on PATH, so ENTER either
 	// launches it or says it is not here — never anything destructive.
 	ToolInstalled bool `json:"toolInstalled"`
+	// ToolHint is set when Tool is a legacy name found in place of the current
+	// one: it tells the operator what the tool is called now.
+	ToolHint string `json:"toolHint,omitempty"`
 }
 
 // Backend is the boundary between the cockpit and the machine. Read takes one
