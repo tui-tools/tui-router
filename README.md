@@ -24,9 +24,8 @@ same handoff the family launcher uses. The overview is here; the change happens 
 card opens, behind that tool's own preview and confirm.
 
 <!-- stability:start -->
-> **Beta.** The family is days old and still changing. Package names, flags
-> and keys may move without notice until 1.0. Pin versions, and report what
-> breaks.
+> **Beta** tools may still change keys, flags or output before their 1.0;
+> stable tools follow semver. Pin versions, and report what breaks.
 <!-- stability:end -->
 
 ## The cards
@@ -232,7 +231,7 @@ Available once tui-router's first release lands in pkgs.tui.tools.
 ### Any distribution, static binary — coming soon
 
 ```sh
-curl -fsSL https://github.com/tui-tools/tui-router/releases/download/v0.4.0/tui-router_0.4.0_linux_amd64.tar.gz | tar -xz tui-router
+curl -fsSL https://github.com/tui-tools/tui-router/releases/download/v0.4.2/tui-router_0.4.2_linux_amd64.tar.gz | tar -xz tui-router
 sudo install -m0755 tui-router /usr/local/bin/tui-router
 ```
 
