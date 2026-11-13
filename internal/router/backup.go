@@ -2,7 +2,6 @@ package router
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"strings"
 
@@ -76,39 +75,21 @@ func (s ReloadStep) String() string {
 	return strings.Join(s.Argv, " ")
 }
 
-// SafeRolesConf re-parses a roles.conf that came out of an artifact and
-// re-renders it through the profile's own validator. roles.conf is sourced by
-// bash, and an artifact is bytes from another machine: rendering the parsed
-// assignment back out is what guarantees a restore can only ever write
-// interface names and MACs into it, never a command substitution someone
-// planted in the file before it was exported.
-//
-// The unrecognised lines (LAN_ADDRESS, LAN_DHCP, anything an operator added)
-// are carried through, so a restore does not quietly drop the knobs the
-// profile also reads — but they are validated as plain assignments first.
+// SafeRolesConf validates a roles.conf that came out of an artifact and
+// re-renders it in canonical form. roles.conf is sourced by bash as root, and an
+// artifact is bytes from another machine, so the file is held to an allowlist:
+// the role sets (interface names and MACs, each member validated) and the two
+// LAN knobs the router profile reads (LAN_ADDRESS, LAN_DHCP, each value
+// validated). Any other line — another variable such as PATH or LD_PRELOAD, a
+// command, a function — refuses the whole file, naming the line. What is
+// written is the render, never the artifact's bytes.
 func SafeRolesConf(text string) (string, error) {
+	if findings := rolesFindings("roles.conf", text); len(findings) > 0 {
+		return "", &RestoreRefusedError{Findings: findings}
+	}
 	conf := ParseRolesConf(text)
-	safe := RolesConf{Assignment: conf.Assignment}
-	for _, extra := range conf.Extras {
-		if !safeRolesExtra(extra) {
-			return "", fmt.Errorf("roles.conf carries a line a restore will not write back: %q", extra)
-		}
-		safe.Extras = append(safe.Extras, extra)
-	}
+	safe := RolesConf{Assignment: conf.Assignment, Extras: canonicalRolesKnobs(text)}
 	return RenderRolesConf(safe)
-}
-
-// safeRolesExtra reports whether an unrecognised roles.conf line is a plain
-// KEY="value" assignment with no shell metacharacter in the value. Anything
-// else — a substitution, a pipe, a second statement — is refused rather than
-// written back into a file bash sources.
-func safeRolesExtra(line string) bool {
-	m := rolesLine.FindStringSubmatch(line)
-	if m == nil {
-		return false
-	}
-	value := unquote(m[2])
-	return !strings.ContainsAny(value, "$`\\\"'();|&<>\n") && !strings.Contains(value, "#")
 }
 
 // MissingRoleDevices reports the interface names an artifact's roles.conf

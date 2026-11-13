@@ -135,9 +135,14 @@ func TestRestoreRefusesTamperedCLI(t *testing.T) {
 	writeRawFile(t, artifact, data)
 
 	out.Reset()
-	err = runRestore([]string{"--demo", artifact}, strings.NewReader(""), &out)
+	// --allow-unsigned, so the refusal is the checksum's and not the missing
+	// signature's: integrity is checked whatever the operator trusts.
+	err = runRestore([]string{"--demo", "--allow-unsigned", artifact}, strings.NewReader(""), &out)
 	if err == nil {
 		t.Fatalf("restore accepted a tampered artifact:\n%s", out.String())
+	}
+	if strings.Contains(err.Error(), "unsigned") {
+		t.Fatalf("the tampered artifact was refused for the wrong reason: %v", err)
 	}
 }
 

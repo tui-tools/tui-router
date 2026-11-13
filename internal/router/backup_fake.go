@@ -150,6 +150,11 @@ func (f *Fake) ApplyNftables(_ context.Context, payload string) error {
 // which is exactly what a real restore lands before the material is provisioned
 // out of band.
 func (f *Fake) WriteConfig(_ context.Context, subsystem, name, content string) error {
+	// The demo runs the same content gate the real write does, so --demo
+	// proves the refusal rather than only asserting it exists.
+	if findings := CheckConfigPart(subsystem, name, content); len(findings) > 0 {
+		return &RestoreRefusedError{Findings: findings}
+	}
 	switch subsystem {
 	case backup.SubsystemNetworkd:
 		if f.networkd == nil {

@@ -297,7 +297,7 @@ press a key for.
 
 ```
 tui-router export  [--out FILE] [--sign KEY] [--demo]
-tui-router restore FILE [--verify PUBKEY] [--dry-run] [--keep] [--demo]
+tui-router restore FILE (--verify PUBKEY | --allow-unsigned) [--dry-run] [--keep] [--demo]
 ```
 
 | Flag | What it does |
@@ -305,18 +305,59 @@ tui-router restore FILE [--verify PUBKEY] [--dry-run] [--keep] [--demo]
 | `export --out FILE` | write the artifact here (default `router-<host>-<stamp>.tuiback`) |
 | `export --sign KEY` | add a detached Ed25519 signature over the checksum file |
 | `restore --verify PUBKEY` | require a valid signature from this public key |
-| `restore --dry-run` | verify and preview only; apply nothing |
+| `restore --allow-unsigned` | restore without a verified signature, trusting the file as it is |
+| `restore --dry-run` | verify and preview only; apply nothing (needs neither trust flag) |
 | `restore --keep` | keep the restored ruleset without the connectivity confirmation |
 | `--demo` | run the whole loop against the in-memory sample router, no root |
 
 The artifact is a gzip'd tar (`.tuiback`) with a `manifest.json`, one part per
 subsystem, an always-present `MANIFEST.sha256`, and — only when you pass a key —
 a detached `SIGNATURE`. Integrity is unconditional: a single altered byte makes
-restore refuse. A signature is optional and is checked only when you pass
-`--verify`; no key is ever required, and no secret is ever written to disk or
-into the artifact. WireGuard key material is stripped from the config and
-referenced by path — you provision it out of band — and accounts carry no
-credential hashes in this stage.
+restore refuse. No secret is ever written to disk or into the artifact.
+WireGuard key material is stripped from the config and referenced by path — you
+provision it out of band — and accounts carry no credential hashes in this
+stage.
+
+**A restore needs a verified signature.** Checksums prove a file is intact, not
+who wrote it: anyone who can edit an artifact can recompute them. A restore
+writes files that root reads and runs, so by default it applies only an
+artifact whose signature verifies against a public key you hold:
+
+```
+tui-router export  --sign router.key --out router.tuiback
+tui-router restore --verify router.pub router.tuiback
+```
+
+The key files hold a base64 Ed25519 seed (`--sign`) and the matching base64
+public key (`--verify`). An unsigned artifact — or a signed one restored
+without `--verify` — is refused with a message that says so. To restore it
+anyway, pass `--allow-unsigned`: the restore then prints, before the
+confirmation, that nothing proves who wrote the file and what you are trusting.
+`--dry-run` previews any artifact without either flag, because it applies
+nothing. The cockpit's restore asks for the public key file; leave it empty and
+an unverified artifact needs `trust unsigned` typed, on a screen in the danger
+colour, before the ordinary confirmation. Exports written from the cockpit are
+unsigned, so restoring one always takes that explicit step.
+
+**What a restore refuses, signed or not.** A signature says who wrote the
+bytes, not that they are safe, so every artifact also goes through a content
+gate before the preview's confirmation and again before each write. A line
+that would run a command or load files from elsewhere as root blocks the whole
+restore, and the preview lists each one as `file:line` with the line itself:
+
+| Part | Refused |
+| --- | --- |
+| `roles.conf` | anything but `WAN_IFS`/`WAN_MACS`/`LAN_IFS`/`LAN_MACS` (and their singular forms), `LAN_ADDRESS` and `LAN_DHCP`, each value validated. The file is sourced by bash, so `PATH=`, `LD_PRELOAD=`, a command or a function is refused |
+| WireGuard | `PreUp`/`PreDown`, and any `PostUp`/`PostDown` that is not one of the exact forms tui-wireguard writes: its key-loading `wg set %i private-key`/`preshared-key` hooks and its iptables forwarding rules |
+| dnsmasq | `dhcp-script`, `dhcp-luascript`, `conf-script`, `tftp-root`, `dumpfile`; `conf-file`, `conf-dir`, `servers-file`, `addn-hosts` and the other file options when they point outside `/etc/dnsmasq.d` (or their standard locations) |
+| sysctl | keys that name a program (`kernel.core_pattern`, `kernel.modprobe`, `kernel.hotplug`, `kernel.poweroff_cmd`, `kernel.usermodehelper.*`, `fs.binfmt_misc.*`) and any key outside `net.*`, since the drop-in only carries forwarding knobs |
+| nftables, tui-firewall rules | `include`, which reads rules from another file |
+| networkd | any unit that is not `.network` or `.link` |
+| WireGuard names, accounts | names that are not plain interface or user names (and so could read as a flag on the command they are passed to) |
+
+The resolver drop-in has no directive that runs or loads anything. `--dry-run`
+shows the same findings and exits non-zero, so a script can check an artifact
+before it is needed.
 
 `restore` never applies silently. It shows a per-subsystem diff, then the exact
 reload commands it will run, then takes one typed confirmation. What runs, in
@@ -325,9 +366,9 @@ order:
 1. **The config files land.** Every subsystem the artifact carries is written
    to its fixed path — the paths are a closed set in the backend, never derived
    from the artifact, so a crafted file cannot steer a write elsewhere.
-   `roles.conf` is re-parsed and re-rendered through the profile's own
-   validator on the way in: it is sourced by shell, so only validated interface
-   names and MACs can ever reach it.
+   `roles.conf` is checked against its allowlist and re-rendered in canonical
+   form on the way in: it is sourced by shell, so only validated interface
+   names, MACs and the two LAN knobs can ever reach it.
 2. **What was written is reloaded** — `networkctl reload`, `systemctl restart
    systemd-resolved`, `systemctl restart dnsmasq` (when dnsmasq is installed),
    `sysctl --system`, and `wg-quick down`/`up` for each restored WireGuard
@@ -343,8 +384,8 @@ order:
 `--dry-run` stops after the preview.
 
 **Scripted restores.** The keep confirmation is read from stdin, so
-`printf 'yes\nkeep\n' | tui-router restore FILE` works. A restore nobody is
-sitting in front of can skip the 60-second window with `--keep`, which keeps
+`printf 'yes\nkeep\n' | tui-router restore --verify KEY.pub FILE` works. A
+restore nobody is sitting in front of can skip the 60-second window with `--keep`, which keeps
 the ruleset the moment it applies. It is for scripted restores or a local
 console: it bypasses the connectivity guard, so only use it when you can reach
 the box another way. Without it the default is unchanged — silence rolls back.

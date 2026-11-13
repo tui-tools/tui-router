@@ -144,8 +144,12 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
 	fs.SetOutput(out)
 	var verifyKey, sudo string
-	var dryRun, demo, keepRuleset bool
-	fs.StringVar(&verifyKey, "verify", "", "require a valid signature from the Ed25519 public key in this file")
+	var dryRun, demo, keepRuleset, allowUnsigned bool
+	fs.StringVar(&verifyKey, "verify", "", "require a valid signature from the Ed25519 public key in this file "+
+		"(required for a restore unless --allow-unsigned)")
+	fs.BoolVar(&allowUnsigned, "allow-unsigned", false,
+		"restore without a verified signature: trust that nobody but you could have written the file "+
+			"since it was exported (its checksums do not prove that)")
 	fs.BoolVar(&dryRun, "dry-run", false, "verify and preview only; apply nothing")
 	fs.BoolVar(&keepRuleset, "keep", false,
 		"keep the restored ruleset without the connectivity confirmation "+
@@ -154,8 +158,9 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 	fs.BoolVar(&demo, "demo", false, "restore into the in-memory sample router, no root needed")
 	fs.StringVar(&sudo, "sudo", "", "privilege escalation prefix, e.g. \"sudo -n\" or \"\" to disable")
 	fs.Usage = func() {
-		_, _ = fmt.Fprintf(out, "tui-router restore FILE [--verify PUBKEY] [--dry-run] [--keep] [--demo]\n\n"+
-			"Verify an artifact, preview it, and apply it after one confirmation.\n\nFlags:\n")
+		_, _ = fmt.Fprintf(out, "tui-router restore FILE (--verify PUBKEY | --allow-unsigned) [--dry-run] [--keep] [--demo]\n\n"+
+			"Verify an artifact, preview it, and apply it after one confirmation.\n"+
+			"A restore needs a signature verified with --verify; --allow-unsigned is the explicit opt-out.\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -166,6 +171,9 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 	}
 	artifactPath := fs.Arg(0)
 	sudoSet := flagPassed(fs, "sudo")
+	if verifyKey != "" && allowUnsigned {
+		return errors.New("--verify and --allow-unsigned contradict each other: pass one of them")
+	}
 
 	data, err := os.ReadFile(artifactPath) //nolint:gosec // the artifact path is an explicit CLI argument
 	if err != nil {
@@ -184,6 +192,13 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		// A tampered, truncated or unverifiable artifact is refused here.
 		return err
+	}
+	// Integrity alone is not trust: whoever can write the file can recompute
+	// its checksums. A restore runs as root, so it needs a signature verified
+	// against a key the operator holds, or the operator saying out loud that
+	// they trust the file anyway. --dry-run applies nothing and may preview.
+	if !art.SignatureVerified && !allowUnsigned && !dryRun {
+		return errors.New(unverifiedRefusal(art))
 	}
 
 	cfg, err := backupConfig(sudo, sudoSet)
@@ -209,6 +224,17 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 		art.Manifest.Hostname, art.Manifest.Timestamp, art.Manifest.ToolVersion)
 	_, _ = fmt.Fprintf(out, "integrity: checksums verified\n")
 	_, _ = fmt.Fprintf(out, "signature: %s\n", signatureStatus(art, verifier != nil))
+	if !art.SignatureVerified {
+		if allowUnsigned {
+			_, _ = fmt.Fprintf(out, "\n%s\n", trustWarning(artifactPath))
+		} else {
+			_, _ = fmt.Fprintln(out, "           a restore of it needs --verify PUBKEY, or --allow-unsigned to trust it as-is")
+		}
+	}
+	findings := router.CheckRestore(art.Sources)
+	if len(findings) > 0 {
+		_, _ = fmt.Fprintf(out, "\n%s\n", findingsBlock(findings))
+	}
 	_, _ = fmt.Fprintf(out, "\nPreview (what a restore would apply):\n%s\n", preview.String())
 	_, _ = fmt.Fprintf(out, "\nThen these commands run, in order ('!' may drop your session):\n%s\n",
 		reloadPlanBlock(backend.ReloadPlan(art.Sources)))
@@ -220,6 +246,13 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 		_, _ = fmt.Fprintf(out, "\nWARNING — the hardware does not match:\n%s\n", warning)
 	}
 
+	if len(findings) > 0 {
+		// Refused in --dry-run too, so a script checking an artifact sees it.
+		if dryRun {
+			_, _ = fmt.Fprintln(out, "\n--dry-run: nothing was applied.")
+		}
+		return &router.RestoreRefusedError{Findings: findings}
+	}
 	if dryRun {
 		_, _ = fmt.Fprintln(out, "\n--dry-run: nothing was applied.")
 		return nil
@@ -269,6 +302,12 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 // the single apply engine both the command and the round-trip test drive.
 func applyRestore(ctx context.Context, backend router.BackupBackend, target backup.Sources,
 	keepTimeout time.Duration, keep keepConfirmFunc, out io.Writer) error {
+
+	// The content gate, before the first write: a restore either writes every
+	// part or, when one carries a directive it refuses, none of them.
+	if findings := router.CheckRestore(target); len(findings) > 0 {
+		return &router.RestoreRefusedError{Findings: findings}
+	}
 
 	// The single-file subsystems, in the order a router is built up: what the
 	// machine is for (roles.conf), then how it forwards and resolves, then the
@@ -493,18 +532,54 @@ func decodeKeyMaterial(raw []byte) []byte {
 	return raw
 }
 
-// signatureStatus renders the signature line of the restore preview.
+// signatureStatus renders the signature line of the restore preview. Only a
+// verified signature is trust; every other case says plainly that it is not.
 func signatureStatus(art *backup.Artifact, verifierGiven bool) string {
 	switch {
 	case art.SignatureVerified:
 		return "present and verified against the given public key"
 	case art.Signed && !verifierGiven:
-		return "present but not checked (no --verify public key given)"
+		return "NOT VERIFIED — a signature is present but no public key was given to check it"
 	case art.Signed:
-		return "present"
+		return "NOT VERIFIED"
 	default:
-		return "none (integrity still verified by checksums)"
+		return "NOT VERIFIED — the artifact is unsigned"
 	}
+}
+
+// unverifiedRefusal is the error a restore returns for an artifact whose
+// signature was not verified when the operator did not opt in to trusting it.
+func unverifiedRefusal(art *backup.Artifact) string {
+	what := "the artifact is unsigned"
+	if art.Signed {
+		what = "the artifact is signed, but no --verify public key was given to check it"
+	}
+	return "restore refused: " + what + ".\n" +
+		"Its checksums prove only that the file is intact, not who wrote it: anyone who\n" +
+		"could edit the file could recompute them, and a restore writes config that root reads.\n" +
+		"Pass --verify PUBKEY with the public key of the --sign key it was exported with,\n" +
+		"or --allow-unsigned if you trust this file as it is (--dry-run previews it either way)."
+}
+
+// trustWarning is the block a restore with --allow-unsigned prints: what the
+// operator is trusting, in words, before the confirmation.
+func trustWarning(path string) string {
+	return "!! TRUSTING AN UNVERIFIED ARTIFACT (--allow-unsigned)\n" +
+		"!! Nothing proves who wrote " + path + ". You are trusting that nobody but you\n" +
+		"!! could have changed it since it was exported: the restore writes its config\n" +
+		"!! files and runs the reload commands below as root. Lines that would run a\n" +
+		"!! command or load other files are still refused, but every other setting is applied."
+}
+
+// findingsBlock renders the content gate's findings for the restore preview.
+func findingsBlock(findings []router.RestoreFinding) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "BLOCKED — the artifact carries %d line(s) a restore will not write\n"+
+		"(they would run a command or load files from elsewhere as root):", len(findings))
+	for _, f := range findings {
+		b.WriteString("\n  " + f.String())
+	}
+	return b.String()
 }
 
 // defaultArtifactName builds the default output filename from the host and the

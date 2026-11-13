@@ -147,7 +147,7 @@ func TestRestoreRefusesDifferentHardwareWithoutTheExtraConfirm(t *testing.T) {
 
 	// Typing only the ordinary confirmation must not apply it.
 	var out bytes.Buffer
-	if err := runRestore([]string{"--demo", artifact}, strings.NewReader("yes\n"), &out); err != nil {
+	if err := runRestore([]string{"--demo", "--allow-unsigned", artifact}, strings.NewReader("yes\n"), &out); err != nil {
 		t.Fatalf("restore: %v\n%s", err, out.String())
 	}
 	text := out.String()
@@ -161,7 +161,7 @@ func TestRestoreRefusesDifferentHardwareWithoutTheExtraConfirm(t *testing.T) {
 	// With the phrase typed first, the restore proceeds to the ordinary
 	// confirmation and applies.
 	out.Reset()
-	if err := runRestore([]string{"--demo", artifact},
+	if err := runRestore([]string{"--demo", "--allow-unsigned", artifact},
 		strings.NewReader("different hardware\nyes\nkeep\n"), &out); err != nil {
 		t.Fatalf("confirmed restore: %v\n%s", err, out.String())
 	}
@@ -194,7 +194,7 @@ func TestRestoreKeepFlagSkipsTheConnectivityWindow(t *testing.T) {
 	var out bytes.Buffer
 	// Stdin carries the apply confirmation and nothing else — exactly what a
 	// script pipes in.
-	if err := runRestore([]string{"--demo", "--keep", artifact},
+	if err := runRestore([]string{"--demo", "--allow-unsigned", "--keep", artifact},
 		strings.NewReader("yes\n"), &out); err != nil {
 		t.Fatalf("restore --keep: %v\n%s", err, out.String())
 	}
@@ -217,7 +217,7 @@ func TestRestoreKeepFlagSkipsTheConnectivityWindow(t *testing.T) {
 func TestRestoreReadsPipedKeepFromTheSameStream(t *testing.T) {
 	artifact := rulesetArtifact(t)
 	var out bytes.Buffer
-	if err := runRestore([]string{"--demo", artifact},
+	if err := runRestore([]string{"--demo", "--allow-unsigned", artifact},
 		strings.NewReader("yes\nkeep\n"), &out); err != nil {
 		t.Fatalf("piped restore: %v\n%s", err, out.String())
 	}
@@ -236,7 +236,7 @@ func TestRestoreReadsPipedKeepFromTheSameStream(t *testing.T) {
 func TestRestoreWithoutKeepStillRollsBack(t *testing.T) {
 	artifact := rulesetArtifact(t)
 	var out bytes.Buffer
-	err := runRestore([]string{"--demo", artifact}, strings.NewReader("yes\n"), &out)
+	err := runRestore([]string{"--demo", "--allow-unsigned", artifact}, strings.NewReader("yes\n"), &out)
 	if err == nil || !strings.Contains(err.Error(), "rolled back") {
 		t.Fatalf("an unanswered keep must roll back, got %v\n%s", err, out.String())
 	}
@@ -351,6 +351,8 @@ func TestBackupScreenRestoreWarnsOnDifferentHardware(t *testing.T) {
 		stepScreen(t, s, keyRunes(string(r)))
 	}
 	stepScreen(t, s, tea.KeyMsg{Type: tea.KeyEnter})
+	// No public key: the plan is previewed unverified.
+	stepScreen(t, s, tea.KeyMsg{Type: tea.KeyEnter})
 	if s.step != bsRestorePlan {
 		t.Fatalf("the restore plan should be shown, step = %v (%s)", s.step, s.failed)
 	}
@@ -386,7 +388,7 @@ func stepScreen(t *testing.T, s *backupScreen, msg tea.Msg) {
 		return
 	}
 	switch s.step {
-	case bsPath, bsConfirm, bsHardwareConfirm:
+	case bsPath, bsVerifyKey, bsConfirm, bsHardwareConfirm, bsTrustConfirm:
 		// A prompt that is still open returns the text input's cursor-blink
 		// command, which sleeps. There is nothing to drive there, so the test
 		// loop drops it rather than waiting out a blink per keystroke.
