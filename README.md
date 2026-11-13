@@ -296,48 +296,90 @@ because a backup you can put in a cron job is worth more than one you can only
 press a key for.
 
 ```
-tui-router export  [--out FILE] [--sign KEY] [--demo]
-tui-router restore FILE (--verify PUBKEY | --allow-unsigned) [--dry-run] [--keep] [--demo]
+tui-router export  [--out FILE] [--sign KEY | --no-sign] [--create-key] [--demo]
+tui-router restore FILE [--verify PUBKEY | --allow-unsigned] [--dry-run] [--keep] [--demo]
 ```
 
 | Flag | What it does |
 | --- | --- |
 | `export --out FILE` | write the artifact here (default `router-<host>-<stamp>.tuiback`) |
-| `export --sign KEY` | add a detached Ed25519 signature over the checksum file |
-| `restore --verify PUBKEY` | require a valid signature from this public key |
+| `export --sign KEY` | sign with the Ed25519 key in this file instead of the machine's own key |
+| `export --no-sign` | write an unsigned artifact (restoring it then needs `--allow-unsigned`) |
+| `export --create-key` | create the machine's signing key on first use without asking (scripted exports) |
+| `restore --verify PUBKEY` | require a valid signature from this public key, instead of the keys the machine trusts |
 | `restore --allow-unsigned` | restore without a verified signature, trusting the file as it is |
 | `restore --dry-run` | verify and preview only; apply nothing (needs neither trust flag) |
 | `restore --keep` | keep the restored ruleset without the connectivity confirmation |
 | `--demo` | run the whole loop against the in-memory sample router, no root |
 
 The artifact is a gzip'd tar (`.tuiback`) with a `manifest.json`, one part per
-subsystem, an always-present `MANIFEST.sha256`, and — only when you pass a key —
-a detached `SIGNATURE`. Integrity is unconditional: a single altered byte makes
+subsystem, an always-present `MANIFEST.sha256`, and — unless you pass `--no-sign` — a
+detached Ed25519 `SIGNATURE` over that checksum file. Integrity is unconditional: a single altered byte makes
 restore refuse. No secret is ever written to disk or into the artifact.
 WireGuard key material is stripped from the config and referenced by path — you
 provision it out of band — and accounts carry no credential hashes in this
 stage.
 
-**A restore needs a verified signature.** Checksums prove a file is intact, not
-who wrote it: anyone who can edit an artifact can recompute them. A restore
-writes files that root reads and runs, so by default it applies only an
-artifact whose signature verifies against a public key you hold:
+**Exports are signed, and a restore needs a verified signature.** Checksums
+prove a file is intact, not who wrote it: anyone who can edit an artifact can
+recompute them. A restore writes files that root reads and runs, so it applies
+only an artifact whose signature verifies against a key the machine trusts or
+one you name.
+
+Every export — from the command line or the cockpit — is signed with the
+machine's own key unless `--sign KEY` names another or `--no-sign` is given:
+
+| File | What it is |
+| --- | --- |
+| `/etc/tui-router/backup-signing.key` | the private key: base64 Ed25519 seed, mode 0600, root only. Never printed, never in an artifact |
+| `/etc/tui-router/backup-signing.pub` | its public half, mode 0644. Restore trusts it on this machine |
+| `/etc/tui-router/trusted-keys/*.pub` | other machines' public keys you place there; restore trusts them too |
+
+The first export creates the pair. It is a change like any other, so it is
+previewed first — `install -d -m 0755 /etc/tui-router`, then `install -m 0600
+/dev/stdin …/backup-signing.key` and `install -m 0644 /dev/stdin
+…/backup-signing.pub` (the private key goes through stdin, never an argument)
+— and runs only after you type `yes`, or with `--create-key` for an export in a
+script. A key that exists is never replaced. Each export also writes the public
+key beside the artifact as `<artifact>.pub` and prints its fingerprint:
 
 ```
-tui-router export  --sign router.key --out router.tuiback
-tui-router restore --verify router.pub router.tuiback
+$ sudo tui-router export --out router.tuiback
+wrote router.tuiback — 9 parts, 4127 bytes, signed: yes
+signed with this machine's key (/etc/tui-router)
+public key: router.tuiback.pub  SHA256:2xq…
 ```
 
-The key files hold a base64 Ed25519 seed (`--sign`) and the matching base64
-public key (`--verify`). An unsigned artifact — or a signed one restored
-without `--verify` — is refused with a message that says so. To restore it
-anyway, pass `--allow-unsigned`: the restore then prints, before the
+Keep that fingerprint (or a copy of the `.pub`) somewhere other than the backup.
+
+- **On the same machine** a restore verifies with no flags: `tui-router restore
+  router.tuiback` tries the machine's own public key and `trusted-keys/`, and
+  says which key verified it.
+- **On another or a rebuilt machine** the exporting key is not there, so the
+  restore is refused until you pass `--verify router-a.pub` with a copy of the
+  public key you kept, or place it in `/etc/tui-router/trusted-keys/`.
+- **The `.pub` beside the artifact is never trusted on its own.** It travels
+  with the backup: whoever could change the one could replace the other. The
+  refusal points at it with its fingerprint, for you to compare with the one you
+  recorded and then name with `--verify`. The cockpit offers it as the default
+  answer of its key prompt, with the fingerprint, only after the machine's own
+  keys failed to verify the artifact; a plan verified with it says so.
+
+What this protects, and what it does not: the signature detects any change to
+the artifact made by someone without the machine's private key — a backup
+edited on a file share, swapped in transit, or re-signed with another key. It
+does not help if the machine itself (root) was compromised when it exported,
+since whoever held root then held the key too; and a rebuilt machine needs the
+public key from somewhere other than the backup, which is why the fingerprint
+is printed.
+
+An unsigned artifact (`--no-sign`, or one from an older version), or a signed
+one no trusted key verifies, is refused with a message that says so. To restore
+it anyway, pass `--allow-unsigned`: the restore then prints, before the
 confirmation, that nothing proves who wrote the file and what you are trusting.
 `--dry-run` previews any artifact without either flag, because it applies
-nothing. The cockpit's restore asks for the public key file; leave it empty and
-an unverified artifact needs `trust unsigned` typed, on a screen in the danger
-colour, before the ordinary confirmation. Exports written from the cockpit are
-unsigned, so restoring one always takes that explicit step.
+nothing. In the cockpit an unverified artifact needs `trust unsigned` typed, on
+a screen in the danger colour, before the ordinary confirmation.
 
 **What a restore refuses, signed or not.** A signature says who wrote the
 bytes, not that they are safe, so every artifact also goes through a content
@@ -384,7 +426,8 @@ order:
 `--dry-run` stops after the preview.
 
 **Scripted restores.** The keep confirmation is read from stdin, so
-`printf 'yes\nkeep\n' | tui-router restore --verify KEY.pub FILE` works. A
+`printf 'yes\nkeep\n' | tui-router restore FILE` works on the machine that
+exported it (add `--verify KEY.pub` anywhere else). A
 restore nobody is sitting in front of can skip the 60-second window with `--keep`, which keeps
 the ruleset the moment it applies. It is for scripted restores or a local
 console: it bypasses the connectivity guard, so only use it when you can reach

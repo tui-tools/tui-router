@@ -206,20 +206,21 @@ func TestApplyRestoreWritesNothingWhenBlocked(t *testing.T) {
 }
 
 // openInScreen drives the cockpit's restore to its plan: the artifact path,
-// then the public key prompt (empty for none).
+// then — for a signed artifact no key of the machine verifies — the public key
+// prompt (empty for none). An unsigned artifact has nothing to verify and goes
+// straight to the plan.
 func openInScreen(t *testing.T, path, pubPath string) *backupScreen {
 	t.Helper()
 	s := newBackupScreen(router.NewFake())
 	stepScreen(t, s, keyRunes("r"))
 	stepScreen(t, s, keyRunes(path))
 	stepScreen(t, s, tea.KeyMsg{Type: tea.KeyEnter})
-	if s.step != bsVerifyKey {
-		t.Fatalf("the restore should ask for a public key, step = %v", s.step)
+	if s.step == bsVerifyKey {
+		s.input.Model.SetValue(pubPath)
+		stepScreen(t, s, tea.KeyMsg{Type: tea.KeyEnter})
+	} else if pubPath != "" {
+		t.Fatalf("the restore should ask for a public key, step = %v (%s)", s.step, s.failed)
 	}
-	if pubPath != "" {
-		stepScreen(t, s, keyRunes(pubPath))
-	}
-	stepScreen(t, s, tea.KeyMsg{Type: tea.KeyEnter})
 	if s.step != bsRestorePlan {
 		t.Fatalf("the restore plan should be shown, step = %v (%s)", s.step, s.failed)
 	}

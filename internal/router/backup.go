@@ -49,6 +49,9 @@ type BackupBackend interface {
 	// not here. An error means the list is unknown, and the caller warns about
 	// that rather than pretending the names matched.
 	LinkNames(ctx context.Context) ([]string, error)
+	// SigningKeys is where export finds the machine's signing key and restore
+	// the public keys it trusts without --verify.
+	SigningKeys() KeyStore
 }
 
 // ReloadStep is one previewed reload command. Argv is what runs and Preview is

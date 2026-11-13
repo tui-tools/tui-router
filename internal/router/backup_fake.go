@@ -92,6 +92,14 @@ table inet filter {
 `
 )
 
+// SigningKeys is the demo's in-memory key store.
+func (f *Fake) SigningKeys() KeyStore {
+	if f.keys == nil {
+		f.keys = &MemKeyStore{}
+	}
+	return f.keys
+}
+
 // Hostname names the demo router.
 func (f *Fake) Hostname() string { return "demo-router" }
 
