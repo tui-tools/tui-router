@@ -233,7 +233,7 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 	// out loud that they trust the file anyway. --dry-run applies nothing and
 	// may preview.
 	if !art.SignatureVerified && !allowUnsigned && !dryRun {
-		return errors.New(unverifiedRefusal(art, store) + besideHint(artifactPath))
+		return errors.New(unverifiedRefusal(art, checked, store) + besideHint(artifactPath))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), backupTimeout)

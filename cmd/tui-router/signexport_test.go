@@ -1,9 +1,14 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -339,4 +344,101 @@ func fileMode(t *testing.T, path string) os.FileMode {
 		t.Fatal(err)
 	}
 	return info.Mode().Perm()
+}
+
+// TestTamperedUnderTheMachinesOwnKeySaysSo: an artifact whose checksums were
+// recomputed after an edit still carries the SIGNATURE the machine made, naming
+// the machine's own key. The refusal must not claim the artifact was signed by
+// some other key — it was signed by this one, and then changed.
+func TestTamperedUnderTheMachinesOwnKeySaysSo(t *testing.T) {
+	onMachine(t)
+	artifact := filepath.Join(t.TempDir(), "r.tuiback")
+	if out, err := exportDefault(t, artifact, "yes\n"); err != nil {
+		t.Fatalf("export: %v\n%s", err, out)
+	}
+	// Different content, consistent checksums, the machine's signature grafted on.
+	edited := artifactFile(t, backup.Sources{Nftables: trustRuleset}, nil)
+	tampered := filepath.Join(t.TempDir(), "t.tuiback")
+	graftSignature(t, artifact, edited, tampered)
+
+	out, err := restoreDemo(t, tampered)
+	if err == nil {
+		t.Fatalf("a tampered artifact was restored:\n%s", out)
+	}
+	if strings.Contains(err.Error(), "not by this machine's key") {
+		t.Errorf("the refusal blames another key for the machine's own signature: %v", err)
+	}
+	if !strings.Contains(err.Error(), "changed after it was signed") {
+		t.Errorf("the refusal does not say the artifact changed after signing: %v", err)
+	}
+
+	var dry bytes.Buffer
+	if err := runRestore([]string{"--demo", "--dry-run", tampered}, strings.NewReader(""), &dry); err != nil {
+		t.Fatalf("dry-run: %v\n%s", err, dry.String())
+	}
+	if !strings.Contains(dry.String(), "changed after it was signed") {
+		t.Errorf("the preview's signature line does not say so:\n%s", dry.String())
+	}
+}
+
+// graftSignature writes dst: the parts of onto, with the SIGNATURE of from.
+func graftSignature(t *testing.T, from, onto, dst string) {
+	t.Helper()
+	signature := tarEntries(t, from)["SIGNATURE"]
+	if signature == nil {
+		t.Fatal("the source artifact has no SIGNATURE")
+	}
+	entries := tarEntries(t, onto)
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	names := make([]string, 0, len(entries))
+	for name := range entries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range append(names, "SIGNATURE") {
+		body := entries[name]
+		if name == "SIGNATURE" {
+			body = signature
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(body))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writeRawFile(t, dst, buf.Bytes())
+}
+
+// tarEntries reads every regular file of a .tuiback.
+func tarEntries(t *testing.T, path string) map[string][]byte {
+	t.Helper()
+	gz, err := gzip.NewReader(strings.NewReader(readFileT(t, path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(gz)
+	entries := map[string][]byte{}
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return entries
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries[hdr.Name] = body
+	}
 }

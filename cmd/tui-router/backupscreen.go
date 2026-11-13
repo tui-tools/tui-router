@@ -777,7 +777,11 @@ func (s *backupScreen) viewRestorePlan(t theme.Theme, width int) string {
 // verified: what is being trusted, in the danger colour, then the prompt.
 func (s *backupScreen) viewTrust(t theme.Theme, width int) string {
 	what := "This artifact is unsigned."
-	if s.artifact != nil && s.artifact.Signed {
+	switch {
+	case s.artifact != nil && s.artifact.Signed && s.checked.named.Path != "":
+		what = "Its signature names " + s.checked.named.Fingerprint() +
+			", a key this machine trusts, but does not verify: it changed after it was signed."
+	case s.artifact != nil && s.artifact.Signed:
 		what = "This artifact is signed, but no key this machine trusts verifies it, and none was given."
 	}
 	text := []string{

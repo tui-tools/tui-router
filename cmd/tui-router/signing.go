@@ -30,6 +30,11 @@ type verification struct {
 	explicit bool
 	// problems are trusted-key files that were skipped, and why.
 	problems []string
+	// named is the trusted key the SIGNATURE names when that key does not
+	// verify it: the artifact was signed with a key this machine trusts and
+	// changed afterwards (or the signature was taken from another artifact).
+	// Its Path is empty otherwise.
+	named router.TrustedKey
 }
 
 // verified reports whether a key verified the artifact.
@@ -80,7 +85,16 @@ func openVerified(data []byte, verifyKey string, store router.KeyStore) (
 			return checked, verification{key: key, problems: problems}, nil
 		}
 	}
-	return art, verification{problems: problems}, nil
+	failed := verification{problems: problems}
+	for _, key := range keys {
+		// The key id is untrusted input, so it only ever selects among keys
+		// the machine already trusts, and only to word the refusal.
+		if art.SignatureKeyID != "" && key.Fingerprint() == art.SignatureKeyID {
+			failed.named = key
+			break
+		}
+	}
+	return art, failed, nil
 }
 
 // readPublicKeyFile reads a public key the operator named.
@@ -121,6 +135,10 @@ func signatureStatus(art *backup.Artifact, v verification) string {
 	case v.verified():
 		return "present and verified against this machine's trusted key " + v.key.Path +
 			" (" + v.key.Fingerprint() + ")"
+	case art.Signed && v.named.Path != "":
+		return "NOT VERIFIED — it names this machine's trusted key " + v.named.Path +
+			" (" + v.named.Fingerprint() + "), but that key does not verify it: " +
+			"the artifact changed after it was signed"
 	case art.Signed && fingerprintRe.MatchString(art.SignatureKeyID):
 		return "NOT VERIFIED — signed, but no key this machine trusts verifies it " +
 			"(it names " + art.SignatureKeyID + ")"
@@ -133,9 +151,14 @@ func signatureStatus(art *backup.Artifact, v verification) string {
 
 // unverifiedRefusal is the error a restore returns for an artifact whose
 // signature was not verified when the operator did not opt in to trusting it.
-func unverifiedRefusal(art *backup.Artifact, store router.KeyStore) string {
+func unverifiedRefusal(art *backup.Artifact, v verification, store router.KeyStore) string {
 	what := "the artifact is unsigned"
-	if art.Signed {
+	switch {
+	case art.Signed && v.named.Path != "":
+		what = "the artifact's signature names a key this machine trusts, " +
+			v.named.Path + " (" + v.named.Fingerprint() + "), but does not verify " +
+			"against it: the artifact changed after it was signed"
+	case art.Signed:
 		what = "the artifact is signed, but not by this machine's key or a key in " +
 			trustedKeysDir(store)
 	}
