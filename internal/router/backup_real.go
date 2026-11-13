@@ -43,6 +43,9 @@ var (
 	dnsmasqSearchPaths    = []string{"/usr/sbin/dnsmasq", "/usr/bin/dnsmasq"}
 )
 
+// SigningKeys is the machine's key store under /etc/tui-router.
+func (r *Real) SigningKeys() KeyStore { return r.keys }
+
 // Hostname names this machine for an export.
 func (r *Real) Hostname() string {
 	name, err := os.Hostname()

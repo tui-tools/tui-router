@@ -96,7 +96,8 @@ func TestExportRestoreSignedCLI(t *testing.T) {
 
 	artifact := filepath.Join(dir, "demo.tuiback")
 	var out bytes.Buffer
-	if err := runExport([]string{"--demo", "--sign", keyPath, "--out", artifact}, "stamp", &out); err != nil {
+	if err := runExport([]string{"--demo", "--sign", keyPath, "--out", artifact}, "stamp",
+		strings.NewReader(""), &out); err != nil {
 		t.Fatalf("export: %v\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "signed: yes") {
@@ -122,7 +123,8 @@ func TestRestoreRefusesTamperedCLI(t *testing.T) {
 	dir := t.TempDir()
 	artifact := filepath.Join(dir, "demo.tuiback")
 	var out bytes.Buffer
-	if err := runExport([]string{"--demo", "--out", artifact}, "stamp", &out); err != nil {
+	if err := runExport([]string{"--demo", "--no-sign", "--out", artifact}, "stamp",
+		strings.NewReader(""), &out); err != nil {
 		t.Fatalf("export: %v", err)
 	}
 

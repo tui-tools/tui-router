@@ -46,6 +46,8 @@ type Fake struct {
 	// test can assert the demo previews and "runs" the same sequence the real
 	// backend would.
 	reloads []string
+	// keys is the demo's signing key store, in memory for the process.
+	keys *MemKeyStore
 }
 
 // Account mirrors backup.Account for the demo backend, so the demo's seed
@@ -64,6 +66,7 @@ func NewFake() *Fake {
 		started:   time.Now(),
 		installed: map[string]bool{},
 		roles:     &fakeRoles{content: demoRolesConf},
+		keys:      &MemKeyStore{},
 		nft:       demoNftRuleset,
 		networkd: map[string]string{
 			"10-wan0.network": demoWanNetwork,

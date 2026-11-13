@@ -10,6 +10,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -31,8 +32,9 @@ const (
 	bsMenu backupStep = iota
 	// bsPath: type the artifact path.
 	bsPath
-	// bsVerifyKey: type the public key a restore verifies the signature with,
-	// or nothing to restore without verification.
+	// bsVerifyKey: no key this machine trusts verified the artifact; type the
+	// public key to verify it with, or nothing to continue without
+	// verification.
 	bsVerifyKey
 	// bsWorking: a read or an apply is in flight.
 	bsWorking
@@ -71,12 +73,23 @@ type backupScreen struct {
 
 	input ui.Input
 	path  string
-	// verifyKey is the public key file the restore verified the artifact's
-	// signature with, empty when the operator gave none.
+	// verifyKey is the public key file the operator named to verify the
+	// artifact's signature, empty when none was named.
 	verifyKey string
+	// keyAsked reports that the key prompt was shown for this restore, so a
+	// second unverified open goes to the plan rather than asking again.
+	keyAsked bool
+	// checked is how the signature check went.
+	checked verification
 
 	// The export plan's material.
 	sources backup.Sources
+	// signer is the machine's signing key; keyPlan, when the machine has none
+	// yet, the previewed steps that create it; keyErr why neither is
+	// available, in which case only an unsigned export is offered.
+	signer  backup.Signer
+	keyPlan *router.KeyCreation
+	keyErr  string
 
 	// The restore plan's material.
 	artifact *backup.Artifact
@@ -107,10 +120,14 @@ type backupScreen struct {
 type (
 	backupCollectedMsg struct {
 		sources backup.Sources
+		signer  backup.Signer
+		keyPlan *router.KeyCreation
+		keyErr  string
 		err     string
 	}
 	backupOpenedMsg struct {
 		artifact *backup.Artifact
+		checked  verification
 		preview  backup.Preview
 		reloads  []router.ReloadStep
 		warning  string
@@ -118,10 +135,8 @@ type (
 		err      string
 	}
 	backupWroteMsg struct {
-		path  string
-		parts int
-		bytes int
-		err   string
+		output string
+		err    string
 	}
 	backupKeepAskMsg struct{}
 	backupAppliedMsg struct {
@@ -150,13 +165,23 @@ func (s *backupScreen) Update(msg tea.Msg) tea.Cmd {
 			return s.fail("reading the router: " + msg.err)
 		}
 		s.sources = msg.sources
+		s.signer, s.keyPlan, s.keyErr = msg.signer, msg.keyPlan, msg.keyErr
 		s.step = bsExportPlan
 		return nil
 	case backupOpenedMsg:
 		if msg.err != "" {
 			return s.fail(msg.err)
 		}
+		if msg.artifact.Signed && !msg.artifact.SignatureVerified && !s.keyAsked {
+			// None of the machine's keys verified it: ask which key does.
+			// An unsigned artifact has nothing to verify, so it goes straight
+			// to the plan and its trust confirmation.
+			s.keyAsked = true
+			s.askForKey()
+			return nil
+		}
 		s.artifact = msg.artifact
+		s.checked = msg.checked
 		s.preview = msg.preview
 		s.reloads = msg.reloads
 		s.warning = msg.warning
@@ -165,12 +190,9 @@ func (s *backupScreen) Update(msg tea.Msg) tea.Cmd {
 		return nil
 	case backupWroteMsg:
 		if msg.err != "" {
-			return s.fail("writing the artifact: " + msg.err)
+			return s.fail(msg.err)
 		}
-		s.output = fmt.Sprintf("wrote %s — %d parts, %d bytes, unsigned.\n"+
-			"Restoring it will ask you to trust it explicitly. A signed artifact verifies instead:\n"+
-			"tui-router export --sign KEY --out FILE",
-			msg.path, msg.parts, msg.bytes)
+		s.output = msg.output
 		s.step = bsDone
 		return nil
 	case backupKeepAskMsg:
@@ -297,24 +319,51 @@ func (s *backupScreen) startPath(value string) tea.Cmd {
 		return nil
 	}
 	s.path = value
+	s.step = bsWorking
 	if s.mode == backupExport {
-		s.step = bsWorking
 		return s.collectCmd()
 	}
-	s.input = ui.NewInput("Public key to verify the signature with?", "empty: no verification", "")
-	s.input.Help = "The Ed25519 public key file of the --sign key the artifact was exported with. " +
-		"Leave it empty to preview without verification: applying an unverified artifact then " +
-		"asks you to type that you trust it."
-	s.step = bsVerifyKey
-	return nil
+	// The machine's own key and its trusted keys are tried first: an
+	// artifact this machine exported verifies without a question.
+	return s.openCmd()
 }
 
-// keyExportPlan is the export confirmation.
+// askForKey opens the key prompt for a signed artifact no trusted key
+// verified. The public key export wrote beside the artifact is offered as the
+// default, with its fingerprint — never used on its own, because it travels
+// with the artifact and so proves nothing until the operator has compared that
+// fingerprint with the one they recorded.
+func (s *backupScreen) askForKey() {
+	value := ""
+	help := "The public key of the machine that exported it, from a copy kept apart from " +
+		"the backup (or place it in " + trustedKeysDir(keyStoreFor(s.backend)) + "). " +
+		"Empty: continue unverified, which asks you to type that you trust it."
+	if key, ok := besideKey(s.path); ok {
+		value = key.Path
+		help = "Beside the artifact: " + key.Path + ", fingerprint " + key.Fingerprint() + ". " +
+			"It travels with the backup, so it proves nothing by itself: keep it only if that " +
+			"fingerprint matches the one you recorded at export. Empty: continue unverified."
+	}
+	s.input = ui.NewInput("No key this machine trusts verifies it. Verify with which public key?",
+		"empty: continue unverified", value)
+	s.input.Help = help
+	s.step = bsVerifyKey
+}
+
+// keyExportPlan is the export confirmation: y writes it signed (creating the
+// machine's key first when the plan showed that step), u writes it unsigned.
 func (s *backupScreen) keyExportPlan(key string) tea.Cmd {
 	switch strings.ToLower(key) {
 	case "y", "enter":
+		if s.signer == nil && s.keyPlan == nil {
+			s.status = "cannot sign: " + s.keyErr + " (u writes it unsigned)"
+			return nil
+		}
 		s.step = bsWorking
-		return s.writeCmd()
+		return s.writeCmd(true)
+	case "u":
+		s.step = bsWorking
+		return s.writeCmd(false)
 	case "n", "esc", "q":
 		s.closed = true
 	}
@@ -386,27 +435,59 @@ func (s *backupScreen) collectCmd() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), backupScreenTimeout)
 		defer cancel()
 		src, err := backend.CollectSources(ctx)
-		return backupCollectedMsg{sources: src, err: errString(err)}
+		if err != nil {
+			return backupCollectedMsg{err: err.Error()}
+		}
+		msg := backupCollectedMsg{sources: src}
+		store := keyStoreFor(backend)
+		msg.signer, err = store.LocalSigner(ctx)
+		if errors.Is(err, router.ErrNoSigningKey) {
+			msg.keyPlan, err = store.PlanCreate()
+		}
+		msg.keyErr = errString(err)
+		return msg
 	}
 }
 
-// writeCmd assembles and writes the artifact the plan described.
-func (s *backupScreen) writeCmd() tea.Cmd {
+// writeCmd assembles and writes the artifact the plan described: signed with
+// the machine's key — created first, with the steps the plan showed, when the
+// machine has none — or unsigned when the operator chose that.
+func (s *backupScreen) writeCmd(sign bool) tea.Cmd {
 	backend, src, path := s.backend, s.sources, s.path
+	signer, keyPlan := s.signer, s.keyPlan
 	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), backupScreenTimeout)
+		defer cancel()
+		store := keyStoreFor(backend)
+		if !sign {
+			signer = nil
+		} else if signer == nil {
+			created, err := store.Create(ctx, keyPlan)
+			if err != nil {
+				return backupWroteMsg{err: "creating the signing key: " + err.Error()}
+			}
+			signer = created
+		}
 		meta := backup.Meta{
 			ToolVersion: version,
 			Hostname:    backend.Hostname(),
 			Timestamp:   time.Now().UTC().Format(time.RFC3339),
 		}
-		data, err := backup.Assemble(src, meta, nil)
+		data, err := backup.Assemble(src, meta, signer)
 		if err != nil {
 			return backupWroteMsg{err: err.Error()}
 		}
-		if err := os.WriteFile(path, data, 0o600); err != nil {
+		pubPath, err := writeArtifact(path, data, signer)
+		if err != nil {
 			return backupWroteMsg{err: err.Error()}
 		}
-		return backupWroteMsg{path: path, parts: countParts(src), bytes: len(data)}
+		summary := fmt.Sprintf("wrote %s — %d parts, %d bytes", path, countParts(src), len(data))
+		if signer == nil {
+			return backupWroteMsg{output: summary + ", unsigned.\n" +
+				"Restoring it will ask you to type that you trust it."}
+		}
+		return backupWroteMsg{output: summary + ", signed.\n" +
+			signedSummary(signer, pubPath, "this machine's key ("+store.Location()+")")}
 	}
 }
 
@@ -420,14 +501,7 @@ func (s *backupScreen) openCmd() tea.Cmd {
 		if err != nil {
 			return backupOpenedMsg{err: "reading the artifact: " + err.Error()}
 		}
-		var verifier backup.Verifier
-		if keyPath != "" {
-			verifier, err = loadVerifier(keyPath)
-			if err != nil {
-				return backupOpenedMsg{err: err.Error()}
-			}
-		}
-		art, err := backup.Open(data, verifier)
+		art, checked, err := openVerified(data, keyPath, keyStoreFor(backend))
 		if err != nil {
 			return backupOpenedMsg{err: err.Error()}
 		}
@@ -439,6 +513,7 @@ func (s *backupScreen) openCmd() tea.Cmd {
 		}
 		return backupOpenedMsg{
 			artifact: art,
+			checked:  checked,
 			preview:  backup.Diff(current, art.Sources),
 			reloads:  backend.ReloadPlan(art.Sources),
 			warning:  deviceWarning(ctx, backend, art.Sources),
@@ -547,10 +622,71 @@ func (s *backupScreen) viewExportPlan(t theme.Theme, width int) string {
 	lines = append(lines, "",
 		t.Base.Render("No secret is written: WireGuard key material is stripped and"),
 		t.Base.Render("referenced by path, and accounts carry names and roles only."),
-		t.Muted.Render("Unsigned. To sign: tui-router export --sign KEY --out FILE"),
-		"",
-		t.Key.Render("y")+t.KeyDesc.Render(" write it    ")+
-			t.Key.Render("n")+t.KeyDesc.Render(" cancel"))
+		"")
+	lines = append(lines, s.exportSignatureLines(t, width)...)
+	yes := " write it signed    "
+	if s.signer == nil && s.keyPlan != nil {
+		yes = " create the key, then write it signed    "
+	}
+	keys := t.Key.Render("u") + t.KeyDesc.Render(" write it unsigned    ") +
+		t.Key.Render("n") + t.KeyDesc.Render(" cancel")
+	if s.signer != nil || s.keyPlan != nil {
+		keys = t.Key.Render("y") + t.KeyDesc.Render(yes) + keys
+	}
+	lines = append(lines, "", keys)
+	return strings.Join(lines, "\n")
+}
+
+// exportSignatureLines says how the export will be signed: with the machine's
+// key, after creating it with the previewed steps, or not at all and why.
+func (s *backupScreen) exportSignatureLines(t theme.Theme, width int) []string {
+	wrap := func(style lipgloss.Style, text string) []string {
+		var out []string
+		for _, line := range strings.Split(wordWrap(text, width-8), "\n") {
+			out = append(out, style.Render("  "+line))
+		}
+		return out
+	}
+	lines := []string{t.Muted.Render("Signature:")}
+	switch {
+	case s.signer != nil:
+		lines = append(lines, t.OK.Render(ui.Truncate("  this machine's key "+
+			backup.Fingerprint(s.signer.Public()), width-6)))
+	case s.keyPlan != nil:
+		lines = append(lines, wrap(t.Warn, "This machine has no signing key yet. Signing creates it first ("+
+			backup.Fingerprint(s.keyPlan.Public)+"); the private key goes through stdin and stays "+
+			"readable by root only:")...)
+		for _, step := range s.keyPlan.Steps {
+			lines = append(lines, t.Command.Render(ui.Truncate("  $ "+step.Preview, width-6)))
+		}
+	default:
+		lines = append(lines, wrap(t.Danger, "cannot sign: "+s.keyErr)...)
+	}
+	lines = append(lines, wrap(t.Muted, "The public key is written beside the artifact as .pub. "+signingLimits)...)
+	return lines
+}
+
+// wordWrap breaks text into lines of at most width cells at spaces.
+func wordWrap(text string, width int) string {
+	if width < 20 {
+		width = 20
+	}
+	var lines []string
+	line := ""
+	for _, word := range strings.Fields(text) {
+		switch {
+		case line == "":
+			line = word
+		case len(line)+1+len(word) > width:
+			lines = append(lines, line)
+			line = word
+		default:
+			line += " " + word
+		}
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -589,12 +725,20 @@ func (s *backupScreen) viewRestorePlan(t theme.Theme, width int) string {
 			m.Hostname, m.Timestamp, m.ToolVersion), width-6)),
 		t.OK.Render("Integrity: checksums verified"),
 	}
-	signature := "Signature: " + signatureStatus(s.artifact, s.verifyKey != "")
+	signature := "Signature: " + signatureStatus(s.artifact, s.checked)
 	if s.artifact.SignatureVerified {
 		lines = append(lines, t.OK.Render(ui.Truncate(signature, width-6)))
+		if s.checked.key.Path == besidePubPath(s.path) {
+			lines = append(lines, t.Warn.Render(ui.Truncate(
+				"  That key sat beside the artifact: this is only as good as your check of its fingerprint.",
+				width-6)))
+		}
 	} else {
 		lines = append(lines, t.Danger.Render(ui.Truncate(signature, width-6)),
 			t.Warn.Render("  Applying it will ask you to type '"+trustPhrase+"'."))
+	}
+	for _, problem := range s.checked.problems {
+		lines = append(lines, t.Warn.Render(ui.Truncate("  skipped trusted key: "+problem, width-6)))
 	}
 	if len(s.findings) > 0 {
 		lines = append(lines, "", t.Danger.Render(fmt.Sprintf(
@@ -633,8 +777,12 @@ func (s *backupScreen) viewRestorePlan(t theme.Theme, width int) string {
 // verified: what is being trusted, in the danger colour, then the prompt.
 func (s *backupScreen) viewTrust(t theme.Theme, width int) string {
 	what := "This artifact is unsigned."
-	if s.artifact != nil && s.artifact.Signed {
-		what = "This artifact is signed, but no public key was given to verify it."
+	switch {
+	case s.artifact != nil && s.artifact.Signed && s.checked.named.Path != "":
+		what = "Its signature names " + s.checked.named.Fingerprint() +
+			", a key this machine trusts, but does not verify: it changed after it was signed."
+	case s.artifact != nil && s.artifact.Signed:
+		what = "This artifact is signed, but no key this machine trusts verifies it, and none was given."
 	}
 	text := []string{
 		what,

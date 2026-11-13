@@ -102,7 +102,7 @@ func run(args []string) error {
 		switch args[0] {
 		case "export":
 			stamp := time.Now().UTC().Format("20060102-150405")
-			return runExport(args[1:], stamp, os.Stdout)
+			return runExport(args[1:], stamp, os.Stdin, os.Stdout)
 		case "restore":
 			return runRestore(args[1:], os.Stdin, os.Stdout)
 		}

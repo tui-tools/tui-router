@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -49,22 +48,32 @@ func backupConfig(sudo string, sudoSet bool) (config.Config, error) {
 
 // runExport reads every subsystem, assembles the artifact and writes it out.
 // stamp is passed in from the CLI layer so the pure packages never read a clock.
-func runExport(args []string, stamp string, out io.Writer) error {
+func runExport(args []string, stamp string, in io.Reader, out io.Writer) error {
 	fs := flag.NewFlagSet("export", flag.ContinueOnError)
 	fs.SetOutput(out)
 	var outPath, signKey, sudo string
-	var demo bool
+	var demo, noSign, createKey bool
 	fs.StringVar(&outPath, "out", "", "artifact path (default router-<host>-<stamp>.tuiback)")
-	fs.StringVar(&signKey, "sign", "", "sign the artifact with the Ed25519 key in this file")
+	fs.StringVar(&signKey, "sign", "", "sign with the Ed25519 key in this file instead of the machine's own key")
+	fs.BoolVar(&noSign, "no-sign", false,
+		"write an unsigned artifact (restoring it then needs --allow-unsigned)")
+	fs.BoolVar(&createKey, "create-key", false,
+		"create the machine's signing key on first use without asking (for scripted exports)")
 	fs.BoolVar(&demo, "demo", false, "export the in-memory sample router, no root needed")
 	fs.StringVar(&sudo, "sudo", "", "privilege escalation prefix, e.g. \"sudo -n\" or \"\" to disable")
 	fs.Usage = func() {
-		_, _ = fmt.Fprintf(out, "tui-router export [--out FILE] [--sign KEY] [--demo]\n\n"+
-			"Read every subsystem and write one integrity-checked .tuiback artifact.\n\nFlags:\n")
+		_, _ = fmt.Fprintf(out, "tui-router export [--out FILE] [--sign KEY | --no-sign] [--create-key] [--demo]\n\n"+
+			"Read every subsystem and write one integrity-checked .tuiback artifact, signed with\n"+
+			"this machine's key (%s, created on the first export) unless\n"+
+			"--sign names another key or --no-sign is given. The public key is written beside it.\n\nFlags:\n",
+			router.SigningKeyDir+"/"+router.SigningKeyName)
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if signKey != "" && noSign {
+		return errors.New("--sign and --no-sign contradict each other: pass one of them")
 	}
 	sudoSet := flagPassed(fs, "sudo")
 
@@ -86,11 +95,28 @@ func runExport(args []string, stamp string, out io.Writer) error {
 	}
 
 	var signer backup.Signer
-	if signKey != "" {
+	var signedWith string
+	switch {
+	case noSign:
+	case signKey != "":
 		signer, err = loadSigner(signKey)
 		if err != nil {
 			return err
 		}
+		signedWith = "the key in " + signKey
+	default:
+		store := keyStoreFor(backend)
+		signer, err = store.LocalSigner(ctx)
+		if errors.Is(err, router.ErrNoSigningKey) {
+			reader := bufio.NewReader(in)
+			signer, err = createLocalKey(ctx, store, createKey,
+				func() string { line, _ := reader.ReadString('\n'); return line },
+				func(text string) { _, _ = fmt.Fprint(out, text) })
+		}
+		if err != nil {
+			return err
+		}
+		signedWith = "this machine's key (" + store.Location() + ")"
 	}
 
 	meta := backup.Meta{
@@ -106,17 +132,19 @@ func runExport(args []string, stamp string, out io.Writer) error {
 	if outPath == "" {
 		outPath = defaultArtifactName(meta.Hostname, stamp)
 	}
-	if err := os.WriteFile(outPath, data, 0o600); err != nil {
-		return fmt.Errorf("writing the artifact: %w", err)
+	pubPath, err := writeArtifact(outPath, data, signer)
+	if err != nil {
+		return err
 	}
 
-	signed := "no"
-	if signer != nil {
-		signed = "yes"
-	}
 	parts := countParts(src)
-	_, _ = fmt.Fprintf(out, "wrote %s — %d parts, %d bytes, signed: %s\n",
-		outPath, parts, len(data), signed)
+	if signer == nil {
+		_, _ = fmt.Fprintf(out, "wrote %s — %d parts, %d bytes, signed: no (--no-sign)\n"+
+			"Restoring it will need --allow-unsigned.\n", outPath, parts, len(data))
+		return nil
+	}
+	_, _ = fmt.Fprintf(out, "wrote %s — %d parts, %d bytes, signed: yes\n%s\n",
+		outPath, parts, len(data), signedSummary(signer, pubPath, signedWith))
 	return nil
 }
 
@@ -146,7 +174,8 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 	var verifyKey, sudo string
 	var dryRun, demo, keepRuleset, allowUnsigned bool
 	fs.StringVar(&verifyKey, "verify", "", "require a valid signature from the Ed25519 public key in this file "+
-		"(required for a restore unless --allow-unsigned)")
+		"(without it, the keys this machine trusts are tried: its own and "+router.SigningKeyDir+"/"+
+		router.TrustedKeysName+"/*.pub)")
 	fs.BoolVar(&allowUnsigned, "allow-unsigned", false,
 		"restore without a verified signature: trust that nobody but you could have written the file "+
 			"since it was exported (its checksums do not prove that)")
@@ -158,9 +187,12 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 	fs.BoolVar(&demo, "demo", false, "restore into the in-memory sample router, no root needed")
 	fs.StringVar(&sudo, "sudo", "", "privilege escalation prefix, e.g. \"sudo -n\" or \"\" to disable")
 	fs.Usage = func() {
-		_, _ = fmt.Fprintf(out, "tui-router restore FILE (--verify PUBKEY | --allow-unsigned) [--dry-run] [--keep] [--demo]\n\n"+
+		_, _ = fmt.Fprintf(out, "tui-router restore FILE [--verify PUBKEY | --allow-unsigned] [--dry-run] [--keep] [--demo]\n\n"+
 			"Verify an artifact, preview it, and apply it after one confirmation.\n"+
-			"A restore needs a signature verified with --verify; --allow-unsigned is the explicit opt-out.\n\nFlags:\n")
+			"A restore needs a verified signature: from this machine's own key or a key in\n"+
+			"%s/%s (tried on their own), or from the key --verify names.\n"+
+			"--allow-unsigned is the explicit opt-out. The .pub beside an artifact is never trusted\n"+
+			"by itself: it travels with the artifact.\n\nFlags:\n", router.SigningKeyDir, router.TrustedKeysName)
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -180,27 +212,6 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 		return fmt.Errorf("reading the artifact: %w", err)
 	}
 
-	var verifier backup.Verifier
-	if verifyKey != "" {
-		verifier, err = loadVerifier(verifyKey)
-		if err != nil {
-			return err
-		}
-	}
-
-	art, err := backup.Open(data, verifier)
-	if err != nil {
-		// A tampered, truncated or unverifiable artifact is refused here.
-		return err
-	}
-	// Integrity alone is not trust: whoever can write the file can recompute
-	// its checksums. A restore runs as root, so it needs a signature verified
-	// against a key the operator holds, or the operator saying out loud that
-	// they trust the file anyway. --dry-run applies nothing and may preview.
-	if !art.SignatureVerified && !allowUnsigned && !dryRun {
-		return errors.New(unverifiedRefusal(art))
-	}
-
 	cfg, err := backupConfig(sudo, sudoSet)
 	if err != nil {
 		return err
@@ -208,6 +219,21 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 	backend, err := pickBackupBackend(cfg, demo)
 	if err != nil {
 		return err
+	}
+	store := keyStoreFor(backend)
+
+	art, checked, err := openVerified(data, verifyKey, store)
+	if err != nil {
+		// A tampered, truncated or unverifiable artifact is refused here.
+		return err
+	}
+	// Integrity alone is not trust: whoever can write the file can recompute
+	// its checksums. A restore runs as root, so it needs a signature verified
+	// against a key the machine or the operator holds, or the operator saying
+	// out loud that they trust the file anyway. --dry-run applies nothing and
+	// may preview.
+	if !art.SignatureVerified && !allowUnsigned && !dryRun {
+		return errors.New(unverifiedRefusal(art, checked, store) + besideHint(artifactPath))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), backupTimeout)
@@ -223,12 +249,18 @@ func runRestore(args []string, in io.Reader, out io.Writer) error {
 	_, _ = fmt.Fprintf(out, "from:     %s at %s (tui-router %s)\n",
 		art.Manifest.Hostname, art.Manifest.Timestamp, art.Manifest.ToolVersion)
 	_, _ = fmt.Fprintf(out, "integrity: checksums verified\n")
-	_, _ = fmt.Fprintf(out, "signature: %s\n", signatureStatus(art, verifier != nil))
+	_, _ = fmt.Fprintf(out, "signature: %s\n", signatureStatus(art, checked))
+	for _, problem := range checked.problems {
+		_, _ = fmt.Fprintf(out, "           skipped trusted key: %s\n", problem)
+	}
 	if !art.SignatureVerified {
 		if allowUnsigned {
 			_, _ = fmt.Fprintf(out, "\n%s\n", trustWarning(artifactPath))
 		} else {
 			_, _ = fmt.Fprintln(out, "           a restore of it needs --verify PUBKEY, or --allow-unsigned to trust it as-is")
+		}
+		if hint := besideHint(artifactPath); hint != "" {
+			_, _ = fmt.Fprintln(out, strings.TrimLeft(hint, "\n"))
 		}
 	}
 	findings := router.CheckRestore(art.Sources)
@@ -511,54 +543,26 @@ func loadSigner(path string) (backup.Signer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading the signing key: %w", err)
 	}
-	return backup.NewEd25519Signer(decodeKeyMaterial(raw), "")
-}
-
-// loadVerifier reads an Ed25519 public key file and builds a Verifier.
-func loadVerifier(path string) (backup.Verifier, error) {
-	raw, err := os.ReadFile(path) //nolint:gosec // the key path is an explicit CLI argument
+	key := backup.DecodeKeyMaterial(raw)
+	signer, err := backup.NewEd25519Signer(key, "")
 	if err != nil {
-		return nil, fmt.Errorf("reading the public key: %w", err)
+		return nil, err
 	}
-	return backup.NewEd25519Verifier(decodeKeyMaterial(raw))
+	// Named by its fingerprint, as the machine's own key is.
+	return backup.NewEd25519Signer(key, backup.Fingerprint(signer.Public()))
 }
 
-// decodeKeyMaterial accepts a base64 key file or a raw one: it tries to decode
-// the trimmed text as base64 and falls back to the bytes as they are.
-func decodeKeyMaterial(raw []byte) []byte {
-	if decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw))); err == nil {
-		return decoded
+// besideHint points at the public key export left beside the artifact, with
+// its fingerprint, as something to compare and name explicitly — never as a
+// key the restore uses on its own. Empty when there is none.
+func besideHint(artifactPath string) string {
+	key, ok := besideKey(artifactPath)
+	if !ok {
+		return ""
 	}
-	return raw
-}
-
-// signatureStatus renders the signature line of the restore preview. Only a
-// verified signature is trust; every other case says plainly that it is not.
-func signatureStatus(art *backup.Artifact, verifierGiven bool) string {
-	switch {
-	case art.SignatureVerified:
-		return "present and verified against the given public key"
-	case art.Signed && !verifierGiven:
-		return "NOT VERIFIED — a signature is present but no public key was given to check it"
-	case art.Signed:
-		return "NOT VERIFIED"
-	default:
-		return "NOT VERIFIED — the artifact is unsigned"
-	}
-}
-
-// unverifiedRefusal is the error a restore returns for an artifact whose
-// signature was not verified when the operator did not opt in to trusting it.
-func unverifiedRefusal(art *backup.Artifact) string {
-	what := "the artifact is unsigned"
-	if art.Signed {
-		what = "the artifact is signed, but no --verify public key was given to check it"
-	}
-	return "restore refused: " + what + ".\n" +
-		"Its checksums prove only that the file is intact, not who wrote it: anyone who\n" +
-		"could edit the file could recompute them, and a restore writes config that root reads.\n" +
-		"Pass --verify PUBKEY with the public key of the --sign key it was exported with,\n" +
-		"or --allow-unsigned if you trust this file as it is (--dry-run previews it either way)."
+	return "\n" + key.Path + " sits beside the artifact (" + key.Fingerprint() + ").\n" +
+		"It is not trusted on its own: it travels with the backup. If that fingerprint matches\n" +
+		"the one you recorded when exporting, pass --verify " + key.Path
 }
 
 // trustWarning is the block a restore with --allow-unsigned prints: what the

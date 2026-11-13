@@ -36,6 +36,11 @@ type Artifact struct {
 	Signed bool
 	// SignatureVerified reports whether the signature was checked and passed.
 	SignatureVerified bool
+	// SignatureKeyID is the key id the SIGNATURE line names: the signing
+	// key's fingerprint for an artifact this version exported, "-" or empty
+	// otherwise. It is a claim made by the file, so it is only ever shown as
+	// a hint about which key to look for, never taken as proof of anything.
+	SignatureKeyID string
 }
 
 // Open reads, sanitizes and verifies an artifact. Integrity is unconditional:
@@ -79,6 +84,9 @@ func Open(data []byte, verifier Verifier) (*Artifact, error) {
 
 	if sigRaw, present := files[signaturePath]; present {
 		art.Signed = true
+		if _, keyID, err := decodeSignature(sigRaw); err == nil && keyID != "-" {
+			art.SignatureKeyID = keyID
+		}
 		if verifier != nil {
 			if err := verifySignature(sigRaw, checksums, verifier); err != nil {
 				return nil, err
