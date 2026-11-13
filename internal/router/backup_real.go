@@ -151,6 +151,11 @@ func (r *Real) WriteConfig(ctx context.Context, subsystem, name, content string)
 	if err != nil {
 		return err
 	}
+	// The content gate, again at the exec site: whatever the caller checked,
+	// nothing that runs a command or reads another file as root is written.
+	if findings := CheckConfigPart(subsystem, name, content); len(findings) > 0 {
+		return &RestoreRefusedError{Findings: findings}
+	}
 	if subsystem == backup.SubsystemRoles {
 		// roles.conf is sourced by bash. Never write an artifact's bytes into
 		// it: re-parse and re-render them, so only validated interface names
@@ -241,6 +246,11 @@ func safeJoin(dir, name string) (string, error) {
 func (r *Real) ApplyAccounts(ctx context.Context, accounts []backup.Account) error {
 	if len(accounts) == 0 {
 		return nil
+	}
+	// A name reaches the useradd/groupadd argv; one that is not a plain
+	// portable name (or reads as a flag) is refused before anything runs.
+	if findings := checkAccounts(accounts); len(findings) > 0 {
+		return &RestoreRefusedError{Findings: findings}
 	}
 	if r.useradd == nil || r.useradd.Bin == "" {
 		return errors.New("useradd is not available to provision accounts")

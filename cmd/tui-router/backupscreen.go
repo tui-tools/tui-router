@@ -31,6 +31,9 @@ const (
 	bsMenu backupStep = iota
 	// bsPath: type the artifact path.
 	bsPath
+	// bsVerifyKey: type the public key a restore verifies the signature with,
+	// or nothing to restore without verification.
+	bsVerifyKey
 	// bsWorking: a read or an apply is in flight.
 	bsWorking
 	// bsExportPlan: what the export will write, before it writes it.
@@ -40,6 +43,10 @@ const (
 	// bsHardwareConfirm: the extra typed confirmation a NIC-name mismatch
 	// requires, shown before the ordinary one.
 	bsHardwareConfirm
+	// bsTrustConfirm: the extra typed confirmation an artifact whose signature
+	// was not verified requires, shown in the danger colour before the
+	// ordinary one.
+	bsTrustConfirm
 	// bsConfirm: the typed "yes" that applies a restore.
 	bsConfirm
 	// bsKeep: the ruleset is live and waiting for the connectivity keep.
@@ -64,6 +71,9 @@ type backupScreen struct {
 
 	input ui.Input
 	path  string
+	// verifyKey is the public key file the restore verified the artifact's
+	// signature with, empty when the operator gave none.
+	verifyKey string
 
 	// The export plan's material.
 	sources backup.Sources
@@ -73,6 +83,9 @@ type backupScreen struct {
 	preview  backup.Preview
 	reloads  []router.ReloadStep
 	warning  string
+	// findings are the lines the content gate refuses; any one blocks the
+	// restore.
+	findings []router.RestoreFinding
 
 	// output is what the apply engine printed, shown on the done screen.
 	output string
@@ -101,6 +114,7 @@ type (
 		preview  backup.Preview
 		reloads  []router.ReloadStep
 		warning  string
+		findings []router.RestoreFinding
 		err      string
 	}
 	backupWroteMsg struct {
@@ -146,6 +160,7 @@ func (s *backupScreen) Update(msg tea.Msg) tea.Cmd {
 		s.preview = msg.preview
 		s.reloads = msg.reloads
 		s.warning = msg.warning
+		s.findings = msg.findings
 		s.step = bsRestorePlan
 		return nil
 	case backupWroteMsg:
@@ -153,7 +168,8 @@ func (s *backupScreen) Update(msg tea.Msg) tea.Cmd {
 			return s.fail("writing the artifact: " + msg.err)
 		}
 		s.output = fmt.Sprintf("wrote %s — %d parts, %d bytes, unsigned.\n"+
-			"Sign an artifact with: tui-router export --sign KEY --out FILE",
+			"Restoring it will ask you to trust it explicitly. A signed artifact verifies instead:\n"+
+			"tui-router export --sign KEY --out FILE",
 			msg.path, msg.parts, msg.bytes)
 		s.step = bsDone
 		return nil
@@ -187,7 +203,7 @@ func (s *backupScreen) handleKey(msg tea.KeyMsg) tea.Cmd {
 	switch s.step {
 	case bsMenu:
 		return s.keyMenu(msg.String())
-	case bsPath, bsHardwareConfirm, bsConfirm:
+	case bsPath, bsVerifyKey, bsHardwareConfirm, bsTrustConfirm, bsConfirm:
 		return s.keyInput(msg)
 	case bsExportPlan:
 		return s.keyExportPlan(msg.String())
@@ -236,9 +252,18 @@ func (s *backupScreen) keyInput(msg tea.KeyMsg) tea.Cmd {
 	switch s.step {
 	case bsPath:
 		return s.startPath(value)
+	case bsVerifyKey:
+		s.verifyKey = value
+		s.step = bsWorking
+		return s.openCmd()
 	case bsHardwareConfirm:
 		if value != hardwarePhrase {
 			return s.fail("the hardware confirmation did not match; nothing was applied")
+		}
+		return s.trustOrConfirm()
+	case bsTrustConfirm:
+		if value != trustPhrase {
+			return s.fail("the trust confirmation did not match; nothing was applied")
 		}
 		return s.openConfirm()
 	case bsConfirm:
@@ -256,6 +281,11 @@ func (s *backupScreen) keyInput(msg tea.KeyMsg) tea.Cmd {
 // "yes": a different phrase cannot be typed by reflex.
 const hardwarePhrase = "different hardware"
 
+// trustPhrase is what the operator types to restore an artifact whose
+// signature was not verified. Like the hardware phrase it is not "yes": it
+// names what is being accepted.
+const trustPhrase = "trust unsigned"
+
 // startPath resolves the typed path and starts the flow's first read.
 func (s *backupScreen) startPath(value string) tea.Cmd {
 	if value == "" {
@@ -267,11 +297,16 @@ func (s *backupScreen) startPath(value string) tea.Cmd {
 		return nil
 	}
 	s.path = value
-	s.step = bsWorking
 	if s.mode == backupExport {
+		s.step = bsWorking
 		return s.collectCmd()
 	}
-	return s.openCmd()
+	s.input = ui.NewInput("Public key to verify the signature with?", "empty: no verification", "")
+	s.input.Help = "The Ed25519 public key file of the --sign key the artifact was exported with. " +
+		"Leave it empty to preview without verification: applying an unverified artifact then " +
+		"asks you to type that you trust it."
+	s.step = bsVerifyKey
+	return nil
 }
 
 // keyExportPlan is the export confirmation.
@@ -291,6 +326,9 @@ func (s *backupScreen) keyExportPlan(key string) tea.Cmd {
 func (s *backupScreen) keyRestorePlan(key string) tea.Cmd {
 	switch strings.ToLower(key) {
 	case "y", "enter":
+		if len(s.findings) > 0 {
+			return s.fail((&router.RestoreRefusedError{Findings: s.findings}).Error())
+		}
 		if !s.preview.HasChanges() {
 			s.output = "The machine already matches the artifact; nothing to apply."
 			s.step = bsDone
@@ -302,10 +340,21 @@ func (s *backupScreen) keyRestorePlan(key string) tea.Cmd {
 			s.step = bsHardwareConfirm
 			return nil
 		}
-		return s.openConfirm()
+		return s.trustOrConfirm()
 	case "n", "esc", "q":
 		s.closed = true
 	}
+	return nil
+}
+
+// trustOrConfirm asks for the trust phrase when the artifact's signature was
+// not verified, and goes straight to the ordinary confirmation when it was.
+func (s *backupScreen) trustOrConfirm() tea.Cmd {
+	if s.artifact != nil && s.artifact.SignatureVerified {
+		return s.openConfirm()
+	}
+	s.input = ui.NewInput("Trust this unverified artifact?", trustPhrase, "")
+	s.step = bsTrustConfirm
 	return nil
 }
 
@@ -365,13 +414,20 @@ func (s *backupScreen) writeCmd() tea.Cmd {
 // preview shows: the diff against the machine, the reload plan, and the
 // hardware warning.
 func (s *backupScreen) openCmd() tea.Cmd {
-	backend, path := s.backend, s.path
+	backend, path, keyPath := s.backend, s.path, s.verifyKey
 	return func() tea.Msg {
 		data, err := os.ReadFile(path) //nolint:gosec // the path is one the operator typed into the prompt
 		if err != nil {
 			return backupOpenedMsg{err: "reading the artifact: " + err.Error()}
 		}
-		art, err := backup.Open(data, nil)
+		var verifier backup.Verifier
+		if keyPath != "" {
+			verifier, err = loadVerifier(keyPath)
+			if err != nil {
+				return backupOpenedMsg{err: err.Error()}
+			}
+		}
+		art, err := backup.Open(data, verifier)
 		if err != nil {
 			return backupOpenedMsg{err: err.Error()}
 		}
@@ -386,6 +442,7 @@ func (s *backupScreen) openCmd() tea.Cmd {
 			preview:  backup.Diff(current, art.Sources),
 			reloads:  backend.ReloadPlan(art.Sources),
 			warning:  deviceWarning(ctx, backend, art.Sources),
+			findings: router.CheckRestore(art.Sources),
 		}
 	}
 }
@@ -432,8 +489,10 @@ func (s *backupScreen) View(t theme.Theme, width, height int) string {
 	switch s.step {
 	case bsMenu:
 		body = s.viewMenu(t)
-	case bsPath, bsHardwareConfirm, bsConfirm:
+	case bsPath, bsVerifyKey, bsHardwareConfirm, bsConfirm:
 		return s.input.View(t, width, height)
+	case bsTrustConfirm:
+		body = s.viewTrust(t, width)
 	case bsWorking:
 		body = t.Muted.Render("working…")
 	case bsExportPlan:
@@ -529,10 +588,26 @@ func (s *backupScreen) viewRestorePlan(t theme.Theme, width int) string {
 		t.Base.Render(ui.Truncate(fmt.Sprintf("From %s at %s (tui-router %s)",
 			m.Hostname, m.Timestamp, m.ToolVersion), width-6)),
 		t.OK.Render("Integrity: checksums verified"),
-		t.Muted.Render("Signature: " + signatureStatus(s.artifact, false)),
-		"",
-		t.Muted.Render("What it would change:"),
 	}
+	signature := "Signature: " + signatureStatus(s.artifact, s.verifyKey != "")
+	if s.artifact.SignatureVerified {
+		lines = append(lines, t.OK.Render(ui.Truncate(signature, width-6)))
+	} else {
+		lines = append(lines, t.Danger.Render(ui.Truncate(signature, width-6)),
+			t.Warn.Render("  Applying it will ask you to type '"+trustPhrase+"'."))
+	}
+	if len(s.findings) > 0 {
+		lines = append(lines, "", t.Danger.Render(fmt.Sprintf(
+			"BLOCKED — %d line(s) would run a command or load files from elsewhere as root:",
+			len(s.findings))))
+		for _, f := range s.findings {
+			for _, line := range strings.Split(f.String(), "\n") {
+				lines = append(lines, t.Danger.Render(ui.Truncate("  "+line, width-6)))
+			}
+		}
+		lines = append(lines, t.Warn.Render("  The restore cannot be applied."))
+	}
+	lines = append(lines, "", t.Muted.Render("What it would change:"))
 	for _, line := range strings.Split(s.preview.String(), "\n") {
 		lines = append(lines, t.Base.Render(ui.Truncate(line, width-6)))
 	}
@@ -551,6 +626,31 @@ func (s *backupScreen) viewRestorePlan(t theme.Theme, width int) string {
 	lines = append(lines, "",
 		t.Key.Render("y")+t.KeyDesc.Render(" continue to the confirmation    ")+
 			t.Key.Render("n")+t.KeyDesc.Render(" cancel"))
+	return strings.Join(lines, "\n")
+}
+
+// viewTrust is the trust confirmation for an artifact whose signature was not
+// verified: what is being trusted, in the danger colour, then the prompt.
+func (s *backupScreen) viewTrust(t theme.Theme, width int) string {
+	what := "This artifact is unsigned."
+	if s.artifact != nil && s.artifact.Signed {
+		what = "This artifact is signed, but no public key was given to verify it."
+	}
+	text := []string{
+		what,
+		"Nothing proves who wrote " + s.path + ".",
+		"Its checksums do not: anyone who could edit the file could recompute them.",
+		"Restoring it trusts that nobody but you changed it since it was exported:",
+		"its config files are written and the reload commands run as root.",
+		"Lines that would run a command or load other files were already refused.",
+	}
+	lines := []string{t.Danger.Render("Trust an unverified artifact?"), ""}
+	for _, line := range text {
+		lines = append(lines, t.Danger.Render(ui.Truncate(line, width-6)))
+	}
+	lines = append(lines, "",
+		t.Base.Render("Type '"+trustPhrase+"' to continue, or esc to cancel:"),
+		s.input.Model.View())
 	return strings.Join(lines, "\n")
 }
 
