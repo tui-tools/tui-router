@@ -160,9 +160,12 @@ func TestAnotherMachineNeedsTheKeyFromElsewhere(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "restore refused") {
 		t.Fatalf("another machine restored it with no key:\n%s", out)
 	}
-	if !strings.Contains(err.Error(), artifact+".pub sits beside the artifact") ||
-		!strings.Contains(err.Error(), "not trusted on its own") {
+	if !strings.Contains(err.Error(), "Untrusted: "+artifact+".pub sits beside the artifact") ||
+		!strings.Contains(err.Error(), "out of band") || !strings.Contains(err.Error(), "It is not used.") {
 		t.Errorf("the refusal does not explain the .pub beside it: %v", err)
+	}
+	if strings.Contains(err.Error(), "--verify "+artifact+".pub") {
+		t.Errorf("the refusal suggests verifying with the .pub that travels with the backup: %v", err)
 	}
 
 	out, err = restoreDemo(t, artifact, "--verify", recorded)
@@ -285,31 +288,56 @@ func TestCockpitExportCreatesTheKeyThenSigns(t *testing.T) {
 	}
 }
 
-// TestCockpitOffersTheBesidePubOnlyAsADefault: on another machine the key
-// prompt is prefilled with the .pub beside the artifact and shows its
-// fingerprint; nothing was verified with it before the operator accepted it.
-func TestCockpitOffersTheBesidePubOnlyAsADefault(t *testing.T) {
+// TestCockpitKeyPromptStartsEmpty: on another machine the key prompt is NOT
+// prefilled with the .pub beside the artifact. The help mentions that file as
+// untrusted, with its fingerprint to compare out of band; enter on the empty
+// prompt continues unverified, never with that key.
+func TestCockpitKeyPromptStartsEmpty(t *testing.T) {
 	onMachine(t)
 	artifact := filepath.Join(t.TempDir(), "r.tuiback")
 	if out, err := exportDefault(t, artifact, "yes\n"); err != nil {
 		t.Fatalf("export: %v\n%s", err, out)
 	}
 	onMachine(t)
-	s := newBackupScreen(router.NewFake())
-	stepScreen(t, s, keyRunes("r"))
-	s.input.Model.SetValue(artifact)
-	stepScreen(t, s, tea.KeyMsg{Type: tea.KeyEnter})
+	s := openInCockpit(t, artifact)
 	if s.step != bsVerifyKey {
 		t.Fatalf("step = %v (%s)", s.step, s.failed)
 	}
 	key, _ := besideKey(artifact)
-	if s.input.Value() != artifact+".pub" || !strings.Contains(s.input.Help, key.Fingerprint()) ||
-		!strings.Contains(s.input.Help, "proves nothing by itself") {
-		t.Errorf("prompt value %q help %q", s.input.Value(), s.input.Help)
+	if s.input.Value() != "" {
+		t.Errorf("the key prompt was prefilled with %q", s.input.Value())
+	}
+	for _, want := range []string{"Untrusted: " + artifact + ".pub", key.Fingerprint(),
+		"out of band", "It is not used."} {
+		if !strings.Contains(s.input.Help, want) {
+			t.Errorf("the prompt help lacks %q: %q", want, s.input.Help)
+		}
 	}
 	if s.artifact != nil {
 		t.Fatal("an artifact was accepted before the operator chose a key")
 	}
+	stepScreen(t, s, tea.KeyMsg{Type: tea.KeyEnter})
+	if s.step != bsRestorePlan || s.artifact.SignatureVerified || s.checked.verified() {
+		t.Fatalf("enter on the empty prompt: step %v verified %v (%s)",
+			s.step, s.artifact != nil && s.artifact.SignatureVerified, s.failed)
+	}
+	if view := s.View(theme.New(), 160, 80); !strings.Contains(view, "NOT VERIFIED") {
+		t.Errorf("the plan does not say the artifact is unverified:\n%s", view)
+	}
+}
+
+// TestCockpitBesidePubOnlyWhenTyped: the .pub beside the artifact verifies only
+// when the operator types its path themselves, and the plan then says the
+// result is only as good as their check of its fingerprint.
+func TestCockpitBesidePubOnlyWhenTyped(t *testing.T) {
+	onMachine(t)
+	artifact := filepath.Join(t.TempDir(), "r.tuiback")
+	if out, err := exportDefault(t, artifact, "yes\n"); err != nil {
+		t.Fatalf("export: %v\n%s", err, out)
+	}
+	onMachine(t)
+	s := openInCockpit(t, artifact)
+	s.input.Model.SetValue(artifact + ".pub")
 	stepScreen(t, s, tea.KeyMsg{Type: tea.KeyEnter})
 	if s.step != bsRestorePlan || !s.artifact.SignatureVerified {
 		t.Fatalf("step %v (%s)", s.step, s.failed)
@@ -317,6 +345,39 @@ func TestCockpitOffersTheBesidePubOnlyAsADefault(t *testing.T) {
 	if view := s.View(theme.New(), 160, 80); !strings.Contains(view, "only as good as your check") {
 		t.Errorf("the plan does not qualify a key that sat beside the artifact:\n%s", view)
 	}
+}
+
+// TestCockpitForgedPubIsNeverSelected: an attacker who re-signed the artifact
+// and replaced the .pub beside it gets nothing by default. The prompt is empty,
+// so enter leaves the plan unverified, behind the typed trust phrase.
+func TestCockpitForgedPubIsNeverSelected(t *testing.T) {
+	onMachine(t)
+	attacker, attackerPub := signingPair(t)
+	forged := artifactFile(t, backup.Sources{Nftables: trustRuleset}, attacker)
+	writeFile(t, forged+".pub", readFileT(t, attackerPub))
+
+	s := openInCockpit(t, forged)
+	if s.step != bsVerifyKey || s.input.Value() != "" {
+		t.Fatalf("step %v value %q (%s)", s.step, s.input.Value(), s.failed)
+	}
+	stepScreen(t, s, tea.KeyMsg{Type: tea.KeyEnter})
+	if s.step != bsRestorePlan || s.artifact.SignatureVerified {
+		t.Fatalf("the forged artifact verified by default: step %v (%s)", s.step, s.failed)
+	}
+	stepScreen(t, s, keyRunes("y"))
+	if s.step != bsTrustConfirm {
+		t.Errorf("an unverified plan did not ask for the trust phrase: step %v", s.step)
+	}
+}
+
+// openInCockpit starts the cockpit's restore flow on artifact.
+func openInCockpit(t *testing.T, artifact string) *backupScreen {
+	t.Helper()
+	s := newBackupScreen(router.NewFake())
+	stepScreen(t, s, keyRunes("r"))
+	s.input.Model.SetValue(artifact)
+	stepScreen(t, s, tea.KeyMsg{Type: tea.KeyEnter})
+	return s
 }
 
 func openArtifact(t *testing.T, path string) *backup.Artifact {

@@ -25,12 +25,29 @@ const backupTimeout = 60 * time.Second
 // terminal, and the interactive command drives it with a timed stdin read.
 type keepConfirmFunc func() bool
 
-// pickBackupBackend returns the demo or real backend as a BackupBackend.
-func pickBackupBackend(cfg config.Config, demo bool) (router.BackupBackend, error) {
+// pickBackupBackend returns the demo or real backend as a BackupBackend. It is
+// a variable so a test can hand the command a demo backend in a given state.
+var pickBackupBackend = func(cfg config.Config, demo bool) (router.BackupBackend, error) {
 	if demo {
 		return router.NewFake(), nil
 	}
 	return router.New(cfg.SudoPrefix())
+}
+
+// exportReadError words a failed read of the machine for an export. A location
+// that exists but could not be read (without root, /etc/wireguard) refuses the
+// export outright: an artifact without it would look complete and restore a
+// router with no WireGuard. There is no partial mode. rerun is the command the
+// operator should run instead.
+func exportReadError(err error, rerun string) error {
+	var unreadable *router.UnreadableSourcesError
+	if errors.As(err, &unreadable) {
+		return fmt.Errorf("export refused: cannot read %s.\n"+
+			"Without them the backup would be incomplete, so nothing was written.\n"+
+			"Run the export as root: %s",
+			strings.Join(unreadable.Unreadable, ", "), rerun)
+	}
+	return fmt.Errorf("reading the router: %w", err)
 }
 
 // backupConfig loads the tool configuration for a subcommand, folding in its
@@ -65,7 +82,9 @@ func runExport(args []string, stamp string, in io.Reader, out io.Writer) error {
 		_, _ = fmt.Fprintf(out, "tui-router export [--out FILE] [--sign KEY | --no-sign] [--create-key] [--demo]\n\n"+
 			"Read every subsystem and write one integrity-checked .tuiback artifact, signed with\n"+
 			"this machine's key (%s, created on the first export) unless\n"+
-			"--sign names another key or --no-sign is given. The public key is written beside it.\n\nFlags:\n",
+			"--sign names another key or --no-sign is given. The public key is written beside it.\n"+
+			"Run it as root: a config location that exists but cannot be read refuses the export\n"+
+			"and nothing is written.\n\nFlags:\n",
 			router.SigningKeyDir+"/"+router.SigningKeyName)
 		fs.PrintDefaults()
 	}
@@ -91,7 +110,7 @@ func runExport(args []string, stamp string, in io.Reader, out io.Writer) error {
 
 	src, err := backend.CollectSources(ctx)
 	if err != nil {
-		return fmt.Errorf("reading the router: %w", err)
+		return exportReadError(err, "sudo tui-router export")
 	}
 
 	var signer backup.Signer
@@ -552,17 +571,16 @@ func loadSigner(path string) (backup.Signer, error) {
 	return backup.NewEd25519Signer(key, backup.Fingerprint(signer.Public()))
 }
 
-// besideHint points at the public key export left beside the artifact, with
-// its fingerprint, as something to compare and name explicitly — never as a
-// key the restore uses on its own. Empty when there is none.
+// besideHint mentions the public key file that sits beside the artifact, with
+// its fingerprint, as untrusted information only. It is never used and never
+// suggested as the --verify argument: whoever could replace the backup could
+// replace that file too. Empty when there is none.
 func besideHint(artifactPath string) string {
 	key, ok := besideKey(artifactPath)
 	if !ok {
 		return ""
 	}
-	return "\n" + key.Path + " sits beside the artifact (" + key.Fingerprint() + ").\n" +
-		"It is not trusted on its own: it travels with the backup. If that fingerprint matches\n" +
-		"the one you recorded when exporting, pass --verify " + key.Path
+	return "\n" + besideNotice(key)
 }
 
 // trustWarning is the block a restore with --allow-unsigned prints: what the

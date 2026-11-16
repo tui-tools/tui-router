@@ -162,7 +162,7 @@ func (s *backupScreen) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case backupCollectedMsg:
 		if msg.err != "" {
-			return s.fail("reading the router: " + msg.err)
+			return s.fail(msg.err)
 		}
 		s.sources = msg.sources
 		s.signer, s.keyPlan, s.keyErr = msg.signer, msg.keyPlan, msg.keyErr
@@ -329,23 +329,20 @@ func (s *backupScreen) startPath(value string) tea.Cmd {
 }
 
 // askForKey opens the key prompt for a signed artifact no trusted key
-// verified. The public key export wrote beside the artifact is offered as the
-// default, with its fingerprint — never used on its own, because it travels
-// with the artifact and so proves nothing until the operator has compared that
-// fingerprint with the one they recorded.
+// verified. The prompt always starts empty: the operator types the path of a
+// key they trust. A .pub beside the artifact is never offered as the value,
+// because whoever could replace the backup could replace that file too; the
+// help only mentions it as untrusted, with its fingerprint to compare against
+// one obtained out of band.
 func (s *backupScreen) askForKey() {
-	value := ""
 	help := "The public key of the machine that exported it, from a copy kept apart from " +
 		"the backup (or place it in " + trustedKeysDir(keyStoreFor(s.backend)) + "). " +
 		"Empty: continue unverified, which asks you to type that you trust it."
 	if key, ok := besideKey(s.path); ok {
-		value = key.Path
-		help = "Beside the artifact: " + key.Path + ", fingerprint " + key.Fingerprint() + ". " +
-			"It travels with the backup, so it proves nothing by itself: keep it only if that " +
-			"fingerprint matches the one you recorded at export. Empty: continue unverified."
+		help += " " + strings.ReplaceAll(besideNotice(key), "\n", " ")
 	}
 	s.input = ui.NewInput("No key this machine trusts verifies it. Verify with which public key?",
-		"empty: continue unverified", value)
+		"empty: continue unverified", "")
 	s.input.Help = help
 	s.step = bsVerifyKey
 }
@@ -436,7 +433,7 @@ func (s *backupScreen) collectCmd() tea.Cmd {
 		defer cancel()
 		src, err := backend.CollectSources(ctx)
 		if err != nil {
-			return backupCollectedMsg{err: err.Error()}
+			return backupCollectedMsg{err: exportReadError(err, "sudo tui-router").Error()}
 		}
 		msg := backupCollectedMsg{sources: src}
 		store := keyStoreFor(backend)

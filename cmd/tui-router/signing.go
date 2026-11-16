@@ -121,6 +121,17 @@ func besideKey(artifactPath string) (router.TrustedKey, bool) {
 	return router.TrustedKey{Path: path, Public: pub}, true
 }
 
+// besideNotice is how a restore mentions the .pub beside an artifact: as
+// untrusted information, with the fingerprint the operator can compare against
+// one obtained out of band. It never names that file as the key to use.
+func besideNotice(key router.TrustedKey) string {
+	return "Untrusted: " + key.Path + " sits beside the artifact, fingerprint " +
+		key.Fingerprint() + ".\n" +
+		"It travels with the backup, so whoever could replace the artifact could replace it too.\n" +
+		"It is not used. Compare that fingerprint with one you obtained out of band (recorded\n" +
+		"at export, or read on the exporting machine), and verify with a key file you trust."
+}
+
 // fingerprintRe is the only shape of a SIGNATURE key id worth repeating: the
 // file is untrusted input, so anything else is not printed.
 var fingerprintRe = regexp.MustCompile(`^SHA256:[A-Za-z0-9+/]{43}$`)

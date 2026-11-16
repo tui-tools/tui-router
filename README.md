@@ -352,18 +352,37 @@ public key: router.tuiback.pub  SHA256:2xq…
 
 Keep that fingerprint (or a copy of the `.pub`) somewhere other than the backup.
 
+Export runs as root. Some of what it captures is readable by root only, most
+of all `/etc/wireguard`. When a location exists but cannot be read, the export
+does not leave it out: it refuses, names what it could not read, and writes
+nothing (no artifact, no `.pub`, no key):
+
+```
+$ tui-router export --out router.tuiback
+export refused: cannot read /etc/wireguard (permission denied).
+Without them the backup would be incomplete, so nothing was written.
+Run the export as root: sudo tui-router export
+```
+
+There is no partial mode. A location that does not exist (a router with no
+WireGuard) is simply absent from the artifact, as before.
+
 - **On the same machine** a restore verifies with no flags: `tui-router restore
   router.tuiback` tries the machine's own public key and `trusted-keys/`, and
   says which key verified it.
 - **On another or a rebuilt machine** the exporting key is not there, so the
   restore is refused until you pass `--verify router-a.pub` with a copy of the
   public key you kept, or place it in `/etc/tui-router/trusted-keys/`.
-- **The `.pub` beside the artifact is never trusted on its own.** It travels
-  with the backup: whoever could change the one could replace the other. The
-  refusal points at it with its fingerprint, for you to compare with the one you
-  recorded and then name with `--verify`. The cockpit offers it as the default
-  answer of its key prompt, with the fingerprint, only after the machine's own
-  keys failed to verify the artifact; a plan verified with it says so.
+- The `.pub` beside the artifact is never used, and never offered. It travels
+  with the backup: whoever could replace the artifact could replace that file
+  too. Neither the command nor the cockpit picks it up on its own. The refusal,
+  and the cockpit's key prompt, mention it only as untrusted information with
+  its fingerprint, to be compared with a fingerprint you obtained out of band
+  (recorded at export, or read on the exporting machine). The cockpit's key
+  prompt starts empty: you type the path of a key you trust, or leave it empty
+  to continue unverified behind the typed `trust unsigned`. If you type the
+  path of that `.pub` yourself, the plan says the result is only as good as
+  your check of its fingerprint.
 
 What this protects, and what it does not: the signature detects any change to
 the artifact made by someone without the machine's private key — a backup

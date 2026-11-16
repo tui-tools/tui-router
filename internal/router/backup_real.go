@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -55,25 +56,67 @@ func (r *Real) Hostname() string {
 	return name
 }
 
-// CollectSources reads every subsystem read-only. Each probe degrades to an
-// empty value on error rather than failing the whole export: a router with no
-// WireGuard still has a ruleset worth capturing.
+// readFile and readDir are the collector's two file reads. They are variables
+// so a test can stand in for /etc (a denied /etc/wireguard, say) without
+// touching the machine's real config.
+var (
+	readFile = os.ReadFile
+	readDir  = os.ReadDir
+)
+
+// sourceReader reads the profile's fixed locations and remembers every one
+// that exists but could not be read. A missing file is normal (a router with no
+// WireGuard still has a ruleset worth capturing); an unreadable one is not,
+// because skipping it would produce an artifact that looks complete and is not.
+type sourceReader struct {
+	unreadable []string
+}
+
+// note records a read error unless it only says the location does not exist.
+func (r *sourceReader) note(path string, err error) {
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	reason := err.Error()
+	if errors.Is(err, fs.ErrPermission) {
+		reason = "permission denied"
+	}
+	r.unreadable = append(r.unreadable, path+" ("+reason+")")
+}
+
+// err is the collection's verdict: nil when everything that exists was read.
+func (r *sourceReader) err() error {
+	if len(r.unreadable) == 0 {
+		return nil
+	}
+	return &UnreadableSourcesError{Unreadable: r.unreadable}
+}
+
+// CollectSources reads every subsystem read-only. A location that does not
+// exist is simply absent from the artifact; one that exists but cannot be read
+// fails the whole collection with an *UnreadableSourcesError, so an export run
+// without root refuses instead of quietly leaving the WireGuard configs out.
 func (r *Real) CollectSources(ctx context.Context) (backup.Sources, error) {
 	src := backup.Sources{}
+	rd := &sourceReader{}
 
 	if r.nft != nil && r.nft.Bin != "" {
-		if out, err := r.nft.Read(ctx, "nft", "list", "ruleset"); err == nil {
+		out, err := r.nft.Read(ctx, "nft", "list", "ruleset")
+		if err != nil {
+			rd.unreadable = append(rd.unreadable,
+				"the live nftables ruleset (nft list ruleset: "+err.Error()+")")
+		} else {
 			src.Nftables = out
 		}
 	}
-	src.Networkd = readDirFiles(networkdEtcDir, ".network", ".link")
-	src.DHCPDNS = readFirstFile(dnsmasqRouterConf, dnsmasqMainConf)
-	src.Wireguard = collectWireguard()
+	src.Networkd = rd.dirFiles(networkdEtcDir, ".network", ".link")
+	src.DHCPDNS = rd.firstFile(dnsmasqRouterConf, dnsmasqMainConf)
+	src.Wireguard = rd.wireguard()
 	// The four supporting files. roles.conf goes through the profile's own
 	// parser and renderer on the way in, so what the artifact carries is the
 	// canonical form — two exports of the same assignment are byte-identical
 	// even if one machine's file was hand-edited.
-	if raw := readFirstFile(RolesConfPath); strings.TrimSpace(raw) != "" {
+	if raw := rd.firstFile(RolesConfPath); strings.TrimSpace(raw) != "" {
 		if canonical, err := SafeRolesConf(raw); err == nil {
 			src.Roles = canonical
 		} else {
@@ -83,21 +126,25 @@ func (r *Real) CollectSources(ctx context.Context) (backup.Sources, error) {
 			src.Roles = raw
 		}
 	}
-	src.Sysctl = readFirstFile(sysctlRouterConf)
-	src.Resolved = readFirstFile(resolvedRouterConf)
-	src.FirewallRules = readFirstFile(firewallRulesPath)
+	src.Sysctl = rd.firstFile(sysctlRouterConf)
+	src.Resolved = rd.firstFile(resolvedRouterConf)
+	src.FirewallRules = rd.firstFile(firewallRulesPath)
 	// Account enumeration is deferred to a later stage: the profile's own list
 	// of router users is not yet declared, so a real export carries no
 	// accounts rather than guessing at which of the machine's users are the
 	// router's. The demo exercises the accounts part end to end.
+	if err := rd.err(); err != nil {
+		return backup.Sources{}, err
+	}
 	return src, nil
 }
 
-// collectWireguard reads each interface config and strips its key material
-// before it is ever held in memory as a Source.
-func collectWireguard() map[string]backup.WGConf {
-	entries, err := os.ReadDir(wireguardEtcDir)
+// wireguard reads each interface config and strips its key material before it
+// is ever held in memory as a Source.
+func (r *sourceReader) wireguard() map[string]backup.WGConf {
+	entries, err := readDir(wireguardEtcDir)
 	if err != nil {
+		r.note(wireguardEtcDir, err)
 		return nil
 	}
 	out := map[string]backup.WGConf{}
@@ -106,8 +153,9 @@ func collectWireguard() map[string]backup.WGConf {
 			continue
 		}
 		path := filepath.Join(wireguardEtcDir, e.Name())
-		data, err := os.ReadFile(path) //nolint:gosec // path is under the fixed /etc/wireguard dir
+		data, err := readFile(path)
 		if err != nil {
+			r.note(path, err)
 			continue
 		}
 		name := strings.TrimSuffix(e.Name(), ".conf")
@@ -396,11 +444,12 @@ func sortedWireguardNames(m map[string]backup.WGConf) []string {
 	return names
 }
 
-// readDirFiles reads every file in dir whose name ends in one of the suffixes,
-// returning a base-name-to-content map. A directory it cannot read yields nil.
-func readDirFiles(dir string, suffixes ...string) map[string]string {
-	entries, err := os.ReadDir(dir)
+// dirFiles reads every file in dir whose name ends in one of the suffixes,
+// keyed by base name. Nil when the directory is absent or holds none.
+func (r *sourceReader) dirFiles(dir string, suffixes ...string) map[string]string {
+	entries, err := readDir(dir)
 	if err != nil {
+		r.note(dir, err)
 		return nil
 	}
 	out := map[string]string{}
@@ -408,8 +457,10 @@ func readDirFiles(dir string, suffixes ...string) map[string]string {
 		if e.IsDir() || !hasAnySuffix(e.Name(), suffixes) {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name())) //nolint:gosec // dir is a fixed /etc location
+		path := filepath.Join(dir, e.Name())
+		data, err := readFile(path)
 		if err != nil {
+			r.note(path, err)
 			continue
 		}
 		out[e.Name()] = string(data)
@@ -420,11 +471,17 @@ func readDirFiles(dir string, suffixes ...string) map[string]string {
 	return out
 }
 
-// readFirstFile returns the content of the first readable path, or "".
-func readFirstFile(paths ...string) string {
+// firstFile returns the content of the first path that exists, or "". A path
+// that exists but cannot be read is recorded, not skipped over.
+func (r *sourceReader) firstFile(paths ...string) string {
 	for _, p := range paths {
-		if data, err := os.ReadFile(p); err == nil { //nolint:gosec // paths are a fixed set of config locations
+		data, err := readFile(p)
+		if err == nil {
 			return string(data)
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			r.note(p, err)
+			return ""
 		}
 	}
 	return ""
