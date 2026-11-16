@@ -92,6 +92,14 @@ table inet filter {
 `
 )
 
+// SigningKeys is the demo's in-memory key store.
+func (f *Fake) SigningKeys() KeyStore {
+	if f.keys == nil {
+		f.keys = &MemKeyStore{}
+	}
+	return f.keys
+}
+
 // Hostname names the demo router.
 func (f *Fake) Hostname() string { return "demo-router" }
 
@@ -99,6 +107,9 @@ func (f *Fake) Hostname() string { return "demo-router" }
 // material exactly as the real collector does — so what the demo exports is
 // already free of secrets.
 func (f *Fake) CollectSources(_ context.Context) (backup.Sources, error) {
+	if len(f.unreadable) > 0 {
+		return backup.Sources{}, &UnreadableSourcesError{Unreadable: append([]string(nil), f.unreadable...)}
+	}
 	src := backup.Sources{
 		Nftables: f.nft,
 		DHCPDNS:  f.dhcpDNS,
@@ -133,6 +144,11 @@ func (f *Fake) CollectSources(_ context.Context) (backup.Sources, error) {
 	src.FirewallRules = f.firewallNFT
 	return src, nil
 }
+
+// SetUnreadable makes the demo's collection fail the way the real one does
+// when locations exist but cannot be read, as /etc/wireguard is for a run
+// without root. Each entry is "path (reason)".
+func (f *Fake) SetUnreadable(entries ...string) { f.unreadable = entries }
 
 // NftablesSnapshot returns the demo's current ruleset.
 func (f *Fake) NftablesSnapshot(_ context.Context) (string, error) { return f.nft, nil }

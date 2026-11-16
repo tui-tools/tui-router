@@ -100,7 +100,8 @@ func TestRestorePreviewsTheReloadPlan(t *testing.T) {
 	dir := t.TempDir()
 	artifact := filepath.Join(dir, "demo.tuiback")
 	var out bytes.Buffer
-	if err := runExport([]string{"--demo", "--out", artifact}, "stamp", &out); err != nil {
+	if err := runExport([]string{"--demo", "--no-sign", "--out", artifact}, "stamp",
+		strings.NewReader(""), &out); err != nil {
 		t.Fatalf("export: %v", err)
 	}
 
@@ -351,8 +352,8 @@ func TestBackupScreenRestoreWarnsOnDifferentHardware(t *testing.T) {
 		stepScreen(t, s, keyRunes(string(r)))
 	}
 	stepScreen(t, s, tea.KeyMsg{Type: tea.KeyEnter})
-	// No public key: the plan is previewed unverified.
-	stepScreen(t, s, tea.KeyMsg{Type: tea.KeyEnter})
+	// Unsigned, so there is no key to ask for: the plan is previewed
+	// unverified straight away.
 	if s.step != bsRestorePlan {
 		t.Fatalf("the restore plan should be shown, step = %v (%s)", s.step, s.failed)
 	}

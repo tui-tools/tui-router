@@ -49,6 +49,9 @@ type BackupBackend interface {
 	// not here. An error means the list is unknown, and the caller warns about
 	// that rather than pretending the names matched.
 	LinkNames(ctx context.Context) ([]string, error)
+	// SigningKeys is where export finds the machine's signing key and restore
+	// the public keys it trusts without --verify.
+	SigningKeys() KeyStore
 }
 
 // ReloadStep is one previewed reload command. Argv is what runs and Preview is
@@ -118,4 +121,21 @@ func MissingRoleDevices(rolesText string, present []string) []string {
 	}
 	sort.Strings(missing)
 	return missing
+}
+
+// UnreadableSourcesError is what CollectSources returns when a config location
+// the router profile owns exists but could not be read. The usual cause is an
+// export run without root: /etc/wireguard is readable by root only, and an
+// export that skipped it would look complete while carrying no WireGuard
+// config at all. Reading the machine never degrades silently: it fails, and
+// the caller says so.
+type UnreadableSourcesError struct {
+	// Unreadable names each location with the reason it could not be read,
+	// e.g. "/etc/wireguard: permission denied".
+	Unreadable []string
+}
+
+func (e *UnreadableSourcesError) Error() string {
+	return "cannot read " + strings.Join(e.Unreadable, "; ") +
+		". Run tui-router as root: without it these parts would be missing"
 }

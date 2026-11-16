@@ -331,7 +331,7 @@ func helpKeys() []ui.KeyHint {
 		{Key: "g / G", Desc: "first / last card"},
 		{Key: "enter", Desc: "open the tool that manages the selected card"},
 		{Key: "w", Desc: "roles wizard: assign the WAN/LAN roles (router profile)"},
-		{Key: "b", Desc: "backup: export an artifact, or restore one (typed confirm)"},
+		{Key: "b", Desc: "backup: export a signed artifact, or restore one (typed confirm)"},
 		{Key: "B", Desc: "reboot the router (typed confirm)"},
 		{Key: "P", Desc: "power the router off (typed confirm)"},
 		{Key: "r / ctrl+r", Desc: "read the router again now"},

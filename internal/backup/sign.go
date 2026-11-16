@@ -2,6 +2,7 @@ package backup
 
 import (
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -20,6 +21,10 @@ type Signer interface {
 	// KeyID names the key in the manifest-independent SIGNATURE header, so a
 	// verifier can tell which public key to expect.
 	KeyID() string
+	// Public is the public half of the signing key. Export writes it beside
+	// the artifact and prints its fingerprint, so the operator can keep a copy
+	// somewhere other than the backup.
+	Public() ed25519.PublicKey
 }
 
 // Verifier checks a detached signature over the checksum file. A nil Verifier
@@ -64,6 +69,45 @@ func (s *ed25519Signer) Sign(data []byte) ([]byte, error) {
 }
 
 func (s *ed25519Signer) KeyID() string { return s.keyID }
+
+func (s *ed25519Signer) Public() ed25519.PublicKey {
+	pub, _ := s.priv.Public().(ed25519.PublicKey)
+	return pub
+}
+
+// Fingerprint names a public key the way an operator compares one by eye:
+// "SHA256:" and the unpadded base64 of its SHA-256, the shape ssh-keygen -l
+// prints. It is what export prints and what restore says verified it.
+func Fingerprint(pub ed25519.PublicKey) string {
+	sum := sha256.Sum256(pub)
+	return "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
+}
+
+// EncodePublicKey renders a public key as the one-line file export writes
+// beside an artifact and the machine keeps beside its signing key: base64 of
+// the raw 32 bytes, the format --verify reads.
+func EncodePublicKey(pub ed25519.PublicKey) []byte {
+	return []byte(base64.StdEncoding.EncodeToString(pub) + "\n")
+}
+
+// DecodeKeyMaterial accepts a base64 key file or a raw one: it tries to decode
+// the trimmed text as base64 and falls back to the bytes as they are.
+func DecodeKeyMaterial(raw []byte) []byte {
+	if decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw))); err == nil {
+		return decoded
+	}
+	return raw
+}
+
+// ParsePublicKey reads a public key file's content into a key.
+func ParsePublicKey(raw []byte) (ed25519.PublicKey, error) {
+	key := DecodeKeyMaterial(raw)
+	if len(key) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("backup: an Ed25519 public key is %d bytes, got %d",
+			ed25519.PublicKeySize, len(key))
+	}
+	return ed25519.PublicKey(append([]byte(nil), key...)), nil
+}
 
 // ed25519Verifier checks an Ed25519 signature against a public key.
 type ed25519Verifier struct {

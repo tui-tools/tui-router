@@ -37,6 +37,8 @@ type Real struct {
 	// networkdDirs are the .network search directories, a field so a test can
 	// point the discovery at its own fixtures.
 	networkdDirs []string
+	// keys is the machine's backup signing key store under /etc/tui-router.
+	keys *DirKeyStore
 }
 
 // unprivileged and privileged are the address-of values the runner options
@@ -108,6 +110,7 @@ func New(sudoPrefix []string) (*Real, error) {
 		Bin: "groupadd", SearchPaths: []string{"/usr/sbin/groupadd", "/sbin/groupadd"},
 		SudoPrefix: sudoPrefix, PrivilegedReads: &privileged,
 	})
+	r.keys = NewDirKeyStore(SigningKeyDir, sudoPrefix)
 	return r, nil
 }
 
