@@ -240,7 +240,7 @@ Upgrades then arrive with the rest of your system updates.
 ### Any distribution, static binary
 
 ```sh
-curl -fsSL https://github.com/tui-tools/tui-router/releases/download/v0.4.2/tui-router_0.4.2_linux_amd64.tar.gz | tar -xz tui-router
+curl -fsSL https://github.com/tui-tools/tui-router/releases/download/v0.5.0/tui-router_0.5.0_linux_amd64.tar.gz | tar -xz tui-router
 sudo install -m0755 tui-router /usr/local/bin/tui-router
 ```
 
